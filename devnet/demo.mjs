@@ -38,21 +38,82 @@ const cleanups = [];
 let shuttingDown = false;
 
 function parseArgs(argv) {
-  const out = { quarters: 4, port: DEFAULT_PORT, precompile: 'success' };
+  const out = { quarters: 4, port: DEFAULT_PORT, precompile: 'success', dashboard: true };
   for (const a of argv) {
     let m;
     if ((m = /^--quarters=(\d+)$/.exec(a))) out.quarters = Number(m[1]);
     else if ((m = /^--port=(\d+)$/.exec(a))) out.port = Number(m[1]);
     else if ((m = /^--precompile=(\w+)$/.exec(a))) out.precompile = m[1];
+    else if (a === '--no-dashboard') out.dashboard = false;
     else throw new Error(`unknown flag ${a}`);
   }
   return out;
 }
 
+/**
+ * Starts the Vite dev server for dashboard/ and waits for it to answer.
+ *
+ * Never fatal: a demo that has a working chain and a working API is still worth showing,
+ * so a missing node_modules or an occupied port prints what to do and carries on.
+ */
+async function startDashboard(apiPort) {
+  const { spawn } = await import('node:child_process');
+  const { existsSync } = await import('node:fs');
+  const { join, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const dir = join(root, 'dashboard');
+
+  if (!existsSync(join(dir, 'node_modules'))) {
+    console.log('  dashboard dependencies are not installed. Run this once:');
+    console.log('    (cd dashboard && npm install)');
+    console.log('  then re-run npm run demo.');
+    return null;
+  }
+
+  // VITE_DEVNET_ORIGIN is what dashboard/vite.config.ts proxies /api to. No --strictPort:
+  // if 5173 is taken, Vite picking the next free port is a better demo than a hard failure,
+  // and the URL is read back from its output rather than assumed.
+  const child = spawn('npm', ['run', 'dev'], {
+    cwd: dir,
+    env: { ...process.env, VITE_DEVNET_ORIGIN: `http://127.0.0.1:${apiPort}` },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  cleanups.push(() => child.kill('SIGTERM'));
+
+  // Vite prints the URL it settled on; trust that rather than assuming the default port.
+  const url = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), 30_000);
+    const scan = (buf) => {
+      const m = /(https?:\/\/localhost:\d+\/?)/.exec(String(buf));
+      if (m) {
+        clearTimeout(timer);
+        resolve(m[1]);
+      }
+    };
+    child.stdout.on('data', scan);
+    child.stderr.on('data', scan);
+    child.on('exit', () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+  });
+
+  if (!url) {
+    console.log('  the dashboard did not come up in time; start it by hand:');
+    console.log('    (cd dashboard && npm run dev)');
+    return null;
+  }
+  console.log(`  Mission Control on ${url}`);
+  return url;
+}
+
+const TOTAL_STEPS = 6;
 let stepNo = 0;
 function step(title) {
   stepNo += 1;
-  console.log(`\n[${stepNo}/5] ${title}`);
+  console.log(`\n[${stepNo}/${TOTAL_STEPS}] ${title}`);
 }
 
 /**
@@ -150,13 +211,24 @@ async function main() {
   }
   cleanups.push(() => server.stop());
 
-  // ---- 5. done ------------------------------------------------------------
+  // ---- 5. the dashboard ---------------------------------------------------
+  // This is the demo. Bringing the chain and the API up but leaving the operator to start
+  // the UI in a second terminal is most of the way to a demo and none of the way to one
+  // that works on the first try in front of an audience.
+  let dashboardUrl = null;
+  if (args.dashboard) {
+    step('Starting Mission Control');
+    dashboardUrl = await startDashboard(args.port);
+  }
+
+  // ---- 6. done ------------------------------------------------------------
   step('Ready');
 
   const [quarterState, gate] = await Promise.all([readSraQuarterState(), readSwaGateState()]);
   const epoch = await currentEpoch();
 
   console.log(`
+  ${dashboardUrl ? `Mission Control ${dashboardUrl}` : 'Mission Control  not started (--no-dashboard)'}
   Dashboard API   http://127.0.0.1:${args.port}/api/state
   Live stream     http://127.0.0.1:${args.port}/api/stream
   Health          http://127.0.0.1:${args.port}/api/health
