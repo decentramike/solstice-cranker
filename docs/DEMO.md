@@ -43,7 +43,7 @@ npm run demo
 ```
 
 Leave yourself a way out: know how to stop it (`Ctrl-C` in the terminal running it) and how
-to start again from scratch (stop, `rm -f .devnet-state.json`, start again).
+to start again from scratch (stop, `rm -rf devnet/.deployed.json devnet/.state`, start again).
 
 **Two things to say out loud at the start, because someone will ask and it is better coming
 from you:** this is a local chain, not calibnet or mainnet; and the SRA and SWA are not
@@ -225,7 +225,7 @@ cranker is complete, configured, and refuses to run against a zero address.
 
 | Symptom | Fix |
 | :-- | :-- |
-| Dashboard shows "disconnected" | The devnet died. `Ctrl-C`, `rm -f .devnet-state.json`, `npm run demo` again. Costs about 30 seconds. |
+| Dashboard shows "disconnected" | The devnet died. `Ctrl-C`, `rm -rf devnet/.deployed.json devnet/.state`, `npm run demo` again. Costs about 30 seconds. |
 | `npm run demo` fails on a missing artifact | `npm run contracts:build` was not run, or was interrupted. Run it. Needs network. |
 | Contracts show as not deployed | The deploy step did not complete. Restart the demo from scratch. |
 | State is somewhere confusing | Restart. The devnet is disposable and there is nothing in it worth keeping. |
@@ -238,7 +238,7 @@ if you narrate it and like disaster if you go quiet.
 
 `Ctrl-C` in the terminal running the demo. The devnet is in-memory and leaves nothing
 behind except `.devnet-state.json`, `devnet/artifacts/` and `devnet/cache/`, all of which
-are gitignored. `rm -f .devnet-state.json` resets it to a fresh chain.
+are gitignored. `rm -rf devnet/.deployed.json devnet/.state` resets it to a fresh chain.
 
 Nothing in the demo touches calibnet or mainnet, and the demo never reads
 `CRANKER_PRIVATE_KEY` — the devnet uses its own well-known, published test accounts, which
