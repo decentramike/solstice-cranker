@@ -1,0 +1,344 @@
+{
+  "network": {
+    "name": "devnet",
+    "chainId": 3141592,
+    "label": "Local devnet",
+    "epochSeconds": 30
+  },
+  "chain": {
+    "epoch": 1604,
+    "connected": true
+  },
+  "contracts": {
+    "sra": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    "swa": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+    "deployed": true
+  },
+  "wallet": {
+    "address": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "balanceFil": "12.4180022931",
+    "minBalanceFil": "0.01",
+    "belowThreshold": false
+  },
+  "quarters": {
+    "activationEpoch": 0,
+    "epochsPerQuarter": 240,
+    "postPeriod": 120,
+    "verificationWindow": 40,
+    "currentQuarter": 6,
+    "phase": "bound",
+    "quarterStartEpoch": 1440,
+    "bindingEpoch": 1600,
+    "nextQuarterStartEpoch": 1680,
+    "epochsUntilNextPhase": 76
+  },
+  "sra": {
+    "lastSubmittedQuarter": 4,
+    "dueQuarter": 6,
+    "deadlineEpoch": 1840,
+    "missedQuarters": [
+      5
+    ],
+    "atRisk": false
+  },
+  "swa": {
+    "lastCheckedQuarter": 6,
+    "dueQuarter": 7,
+    "steps": 3,
+    "gateSteps": 8,
+    "nextThresholdUsd": "9450.0",
+    "complete": false
+  },
+  "runs": [
+    {
+      "runId": "2026-09-17T15:59:44.870Z-11c9",
+      "startedAt": "2026-09-17T15:59:44.870Z",
+      "finishedAt": "2026-09-17T15:59:45.331Z",
+      "durationMs": 461,
+      "network": "devnet",
+      "chainId": 3141592,
+      "epoch": 1604,
+      "cranker": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "balanceFil": "12.4180022931",
+      "paused": false,
+      "pauseReason": null,
+      "actions": [
+        {
+          "call": "submitShares",
+          "quarter": 5,
+          "decision": "skipped",
+          "outcome": "missed-window",
+          "reason": "NotLatestQuarter(5)",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "critical",
+          "message": "Quarter 5 is gone. Quarter 6 bound at epoch 1600 and is now the only submittable quarter; submitShares(5) reverts NotLatestQuarter(5) from here on."
+        },
+        {
+          "call": "submitShares",
+          "quarter": 6,
+          "decision": "skipped",
+          "outcome": "not-due",
+          "reason": null,
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "info",
+          "message": "Quarter 6 is callable with 236 epochs of margin. Queued for the next run."
+        },
+        {
+          "call": "quarterlyGateCheck",
+          "quarter": 7,
+          "decision": "skipped",
+          "outcome": "not-due",
+          "reason": "NotBound(7)",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "info",
+          "message": "Gate check reads quarter 7, which binds at epoch 1840."
+        }
+      ],
+      "schedule": {
+        "currentQuarter": 6,
+        "phase": "bound",
+        "submitDueQuarter": 6,
+        "submitDueAtEpoch": 1600,
+        "submitDeadlineEpoch": 1840,
+        "missedQuarters": [
+          5
+        ],
+        "gateDueQuarter": 7,
+        "gateDueAtEpoch": 1840,
+        "chainAgreesWithConfig": true,
+        "divergence": null
+      },
+      "exitCode": 2
+    },
+    {
+      "runId": "2026-09-17T15:58:44.219Z-77d3",
+      "startedAt": "2026-09-17T15:58:44.219Z",
+      "finishedAt": "2026-09-17T15:58:47.605Z",
+      "durationMs": 3386,
+      "network": "devnet",
+      "chainId": 3141592,
+      "epoch": 1602,
+      "cranker": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "balanceFil": "12.4184519073",
+      "paused": false,
+      "pauseReason": null,
+      "actions": [
+        {
+          "call": "submitShares",
+          "quarter": 5,
+          "decision": "skipped",
+          "outcome": "missed-window",
+          "reason": "NotLatestQuarter(5)",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "critical",
+          "message": "Deadline passed at epoch 1600. Quarter 5 share map lost."
+        },
+        {
+          "call": "quarterlyGateCheck",
+          "quarter": 6,
+          "decision": "sent",
+          "outcome": "landed",
+          "reason": null,
+          "txHash": "0x2a7f906cd3b18e45072c9a1fe6d830b45c18927ea03f6d1b8409c72de5a1b360",
+          "gasUsed": "96128",
+          "severity": "info",
+          "message": "Gate passed: step 3 of 8 taken."
+        }
+      ],
+      "schedule": {
+        "currentQuarter": 6,
+        "phase": "bound",
+        "submitDueQuarter": 6,
+        "submitDueAtEpoch": 1600,
+        "submitDeadlineEpoch": 1840,
+        "missedQuarters": [
+          5
+        ],
+        "gateDueQuarter": 7,
+        "gateDueAtEpoch": 1840,
+        "chainAgreesWithConfig": true,
+        "divergence": null
+      },
+      "exitCode": 2
+    },
+    {
+      "runId": "2026-09-17T15:57:44.001Z-6ab0",
+      "startedAt": "2026-09-17T15:57:44.001Z",
+      "finishedAt": "2026-09-17T15:57:44.902Z",
+      "durationMs": 901,
+      "network": "devnet",
+      "chainId": 3141592,
+      "epoch": 1598,
+      "cranker": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "balanceFil": "0.0041827365",
+      "paused": false,
+      "pauseReason": null,
+      "actions": [
+        {
+          "call": "submitShares",
+          "quarter": 5,
+          "decision": "failed",
+          "outcome": "error",
+          "reason": "insufficient funds for intrinsic transaction cost",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "critical",
+          "message": "Broadcast rejected with 2 epochs of margin left. Fund the cranker wallet now."
+        },
+        {
+          "call": "quarterlyGateCheck",
+          "quarter": 5,
+          "decision": "failed",
+          "outcome": "error",
+          "reason": "insufficient funds for intrinsic transaction cost",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "warn",
+          "message": "Broadcast rejected. Gate check deferred."
+        }
+      ],
+      "schedule": {
+        "currentQuarter": 6,
+        "phase": "verification",
+        "submitDueQuarter": 5,
+        "submitDueAtEpoch": 1360,
+        "submitDeadlineEpoch": 1600,
+        "missedQuarters": [],
+        "gateDueQuarter": 5,
+        "gateDueAtEpoch": 1360,
+        "chainAgreesWithConfig": true,
+        "divergence": null
+      },
+      "exitCode": 1
+    },
+    {
+      "runId": "2026-09-17T15:54:43.612Z-03fd",
+      "startedAt": "2026-09-17T15:54:43.612Z",
+      "finishedAt": "2026-09-17T15:54:44.470Z",
+      "durationMs": 858,
+      "network": "devnet",
+      "chainId": 3141592,
+      "epoch": 1592,
+      "cranker": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "balanceFil": "0.0041827365",
+      "paused": false,
+      "pauseReason": null,
+      "actions": [
+        {
+          "call": "submitShares",
+          "quarter": 5,
+          "decision": "failed",
+          "outcome": "error",
+          "reason": "insufficient funds for intrinsic transaction cost",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "critical",
+          "message": "Broadcast rejected with 8 epochs of margin left."
+        },
+        {
+          "call": "quarterlyGateCheck",
+          "quarter": 5,
+          "decision": "failed",
+          "outcome": "error",
+          "reason": "insufficient funds for intrinsic transaction cost",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "warn",
+          "message": "Broadcast rejected. Gate check deferred."
+        }
+      ],
+      "schedule": {
+        "currentQuarter": 6,
+        "phase": "verification",
+        "submitDueQuarter": 5,
+        "submitDueAtEpoch": 1360,
+        "submitDeadlineEpoch": 1600,
+        "missedQuarters": [],
+        "gateDueQuarter": 5,
+        "gateDueAtEpoch": 1360,
+        "chainAgreesWithConfig": true,
+        "divergence": null
+      },
+      "exitCode": 1
+    }
+  ],
+  "events": [
+    {
+      "type": "FvmActorCall",
+      "blockNumber": 1602,
+      "txHash": "0x2a7f906cd3b18e45072c9a1fe6d830b45c18927ea03f6d1b8409c72de5a1b360",
+      "args": {
+        "actorId": 2,
+        "method": 1129891158,
+        "methodName": "StepWeightRecords",
+        "paramsHex": "0x8203821a000186a01a0003d090"
+      }
+    },
+    {
+      "type": "QuarterlyGateCheckResult",
+      "quarter": 6,
+      "blockNumber": 1602,
+      "txHash": "0x2a7f906cd3b18e45072c9a1fe6d830b45c18927ea03f6d1b8409c72de5a1b360",
+      "args": {
+        "passed": true,
+        "steps": 3
+      }
+    },
+    {
+      "type": "FvmActorCall",
+      "blockNumber": 1121,
+      "txHash": "0x6d0a4f27e9b81c35d72046ab9f3e58c1074d2b6e8a5f9013c46b7d28e0f1a935",
+      "args": {
+        "actorId": 2,
+        "method": 3862548934,
+        "methodName": "SetShares",
+        "paramsHex": "0x8218028343a1b2c3448455667788449900aabb"
+      }
+    },
+    {
+      "type": "SharesSubmitted",
+      "quarter": 4,
+      "blockNumber": 1121,
+      "txHash": "0x6d0a4f27e9b81c35d72046ab9f3e58c1074d2b6e8a5f9013c46b7d28e0f1a935",
+      "args": {
+        "recipientCount": 3,
+        "totalUsd": "12500.0"
+      }
+    },
+    {
+      "type": "QuarterlyGateCheckResult",
+      "quarter": 4,
+      "blockNumber": 1121,
+      "txHash": "0x7e5b2c90a413d867f0925e4bc18d306a7f24e9b05c3d817a2e6f40b9c85d1736",
+      "args": {
+        "passed": false,
+        "steps": 2
+      }
+    }
+  ],
+  "alerts": [
+    {
+      "at": "2026-09-17T15:58:44.219Z",
+      "severity": "critical",
+      "title": "Quarter 5 share map permanently lost",
+      "body": "submitShares(5) never landed. Quarter 6 bound at epoch 1600, after which submitShares(5) reverts NotLatestQuarter(5) forever. There is no on-chain recovery path: quarter 5 rewards stay distributed under the quarter 4 share map. Quarter 6 is unaffected and still submittable until epoch 1840."
+    },
+    {
+      "at": "2026-09-17T15:57:44.902Z",
+      "severity": "critical",
+      "title": "Cranker wallet was below minimum balance for 94 epochs",
+      "body": "The wallet held 0.0041827365 FIL against a 0.01 FIL minimum from epoch 1504 to epoch 1600. Every submitShares broadcast in that window was rejected before it reached the mempool."
+    }
+  ],
+  "rehearsal": {
+    "active": false,
+    "step": 0,
+    "totalSteps": 14,
+    "label": null,
+    "log": []
+  }
+}

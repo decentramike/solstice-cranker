@@ -1,0 +1,294 @@
+{
+  "network": { "name": "devnet", "chainId": 3141592, "label": "Local devnet", "epochSeconds": 30 },
+  "chain": { "epoch": 1852, "connected": true },
+  "contracts": {
+    "sra": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    "swa": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+    "deployed": true
+  },
+  "wallet": {
+    "address": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "balanceFil": "11.9034471852",
+    "minBalanceFil": "0.01",
+    "belowThreshold": false
+  },
+  "quarters": {
+    "activationEpoch": 0,
+    "epochsPerQuarter": 240,
+    "postPeriod": 120,
+    "verificationWindow": 40,
+    "currentQuarter": 7,
+    "phase": "bound",
+    "quarterStartEpoch": 1680,
+    "bindingEpoch": 1840,
+    "nextQuarterStartEpoch": 1920,
+    "epochsUntilNextPhase": 68
+  },
+  "sra": {
+    "lastSubmittedQuarter": 7,
+    "dueQuarter": 7,
+    "deadlineEpoch": 2080,
+    "missedQuarters": [5],
+    "atRisk": false
+  },
+  "swa": {
+    "lastCheckedQuarter": 7,
+    "dueQuarter": 8,
+    "steps": 5,
+    "gateSteps": 8,
+    "nextThresholdUsd": "10440.0",
+    "complete": false
+  },
+  "runs": [
+    {
+      "runId": "2026-09-17T18:01:22.640Z-d2f7",
+      "startedAt": "2026-09-17T18:01:22.640Z",
+      "finishedAt": "2026-09-17T18:01:23.208Z",
+      "durationMs": 568,
+      "network": "devnet",
+      "chainId": 3141592,
+      "epoch": 1852,
+      "cranker": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "balanceFil": "11.9034471852",
+      "paused": false,
+      "pauseReason": null,
+      "actions": [
+        {
+          "call": "submitShares",
+          "quarter": 7,
+          "decision": "skipped",
+          "outcome": "already-done",
+          "reason": "AlreadySubmitted(7)",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "info",
+          "message": "Quarter 7 share map already on chain (landed at epoch 1842). Quarter 8 binds at epoch 2080."
+        },
+        {
+          "call": "quarterlyGateCheck",
+          "quarter": 8,
+          "decision": "skipped",
+          "outcome": "already-done",
+          "reason": null,
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "info",
+          "message": "Quarter 7 already checked at epoch 1842; quarter 8 binds at epoch 2080."
+        }
+      ],
+      "schedule": {
+        "currentQuarter": 7,
+        "phase": "bound",
+        "submitDueQuarter": 7,
+        "submitDueAtEpoch": 1840,
+        "submitDeadlineEpoch": 2080,
+        "missedQuarters": [5],
+        "gateDueQuarter": 8,
+        "gateDueAtEpoch": 2080,
+        "chainAgreesWithConfig": true,
+        "divergence": null
+      },
+      "exitCode": 0
+    },
+    {
+      "runId": "2026-09-17T17:58:22.115Z-8e10",
+      "startedAt": "2026-09-17T17:58:22.115Z",
+      "finishedAt": "2026-09-17T17:58:22.669Z",
+      "durationMs": 554,
+      "network": "devnet",
+      "chainId": 3141592,
+      "epoch": 1846,
+      "cranker": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "balanceFil": "11.9034471852",
+      "paused": false,
+      "pauseReason": null,
+      "actions": [
+        {
+          "call": "submitShares",
+          "quarter": 7,
+          "decision": "skipped",
+          "outcome": "already-done",
+          "reason": "AlreadySubmitted(7)",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "info",
+          "message": "Quarter 7 share map already on chain (landed at epoch 1842)."
+        },
+        {
+          "call": "quarterlyGateCheck",
+          "quarter": 8,
+          "decision": "skipped",
+          "outcome": "already-done",
+          "reason": null,
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "info",
+          "message": "Quarter 7 already checked at epoch 1842."
+        }
+      ],
+      "schedule": {
+        "currentQuarter": 7,
+        "phase": "bound",
+        "submitDueQuarter": 7,
+        "submitDueAtEpoch": 1840,
+        "submitDeadlineEpoch": 2080,
+        "missedQuarters": [5],
+        "gateDueQuarter": 8,
+        "gateDueAtEpoch": 2080,
+        "chainAgreesWithConfig": true,
+        "divergence": null
+      },
+      "exitCode": 0
+    },
+    {
+      "runId": "2026-09-17T17:56:21.804Z-55ba",
+      "startedAt": "2026-09-17T17:56:21.804Z",
+      "finishedAt": "2026-09-17T17:56:25.371Z",
+      "durationMs": 3567,
+      "network": "devnet",
+      "chainId": 3141592,
+      "epoch": 1842,
+      "cranker": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "balanceFil": "11.9061093377",
+      "paused": false,
+      "pauseReason": null,
+      "actions": [
+        {
+          "call": "submitShares",
+          "quarter": 7,
+          "decision": "sent",
+          "outcome": "landed",
+          "reason": null,
+          "txHash": "0xc03d581a9e6b274f0d18a35c9f24e70b6a1d8935ce420f7b16d905ae38c2714f",
+          "gasUsed": "186904",
+          "severity": "info",
+          "message": "Quarter 7 share map submitted: 5 recipients, $24,180.40 bound volume."
+        },
+        {
+          "call": "quarterlyGateCheck",
+          "quarter": 7,
+          "decision": "sent",
+          "outcome": "landed",
+          "reason": null,
+          "txHash": "0x2a7f906cd3b18e45072c9a1fe6d830b45c18927ea03f6d1b8409c72de5a1b360",
+          "gasUsed": "96128",
+          "severity": "info",
+          "message": "Gate passed: step 5 of 8 taken."
+        }
+      ],
+      "schedule": {
+        "currentQuarter": 7,
+        "phase": "bound",
+        "submitDueQuarter": 7,
+        "submitDueAtEpoch": 1840,
+        "submitDeadlineEpoch": 2080,
+        "missedQuarters": [5],
+        "gateDueQuarter": 7,
+        "gateDueAtEpoch": 1840,
+        "chainAgreesWithConfig": true,
+        "divergence": null
+      },
+      "exitCode": 0
+    },
+    {
+      "runId": "2026-09-17T17:53:21.442Z-a0c6",
+      "startedAt": "2026-09-17T17:53:21.442Z",
+      "finishedAt": "2026-09-17T17:53:21.963Z",
+      "durationMs": 521,
+      "network": "devnet",
+      "chainId": 3141592,
+      "epoch": 1836,
+      "cranker": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "balanceFil": "11.9061093377",
+      "paused": false,
+      "pauseReason": null,
+      "actions": [
+        {
+          "call": "submitShares",
+          "quarter": 7,
+          "decision": "skipped",
+          "outcome": "not-due",
+          "reason": "NotBound(7)",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "info",
+          "message": "Quarter 6 is submitted. Quarter 7 binds at epoch 1840 — 4 epochs away."
+        },
+        {
+          "call": "quarterlyGateCheck",
+          "quarter": 7,
+          "decision": "skipped",
+          "outcome": "not-due",
+          "reason": "NotBound(7)",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "info",
+          "message": "Gate check reverts until quarter 7 binds at epoch 1840."
+        }
+      ],
+      "schedule": {
+        "currentQuarter": 7,
+        "phase": "verification",
+        "submitDueQuarter": 6,
+        "submitDueAtEpoch": 1600,
+        "submitDeadlineEpoch": 1840,
+        "missedQuarters": [5],
+        "gateDueQuarter": 7,
+        "gateDueAtEpoch": 1840,
+        "chainAgreesWithConfig": true,
+        "divergence": null
+      },
+      "exitCode": 0
+    }
+  ],
+  "events": [
+    {
+      "type": "FvmActorCall",
+      "blockNumber": 1842,
+      "txHash": "0xc03d581a9e6b274f0d18a35c9f24e70b6a1d8935ce420f7b16d905ae38c2714f",
+      "args": {
+        "actorId": 2,
+        "method": 3862548934,
+        "methodName": "SetShares",
+        "paramsHex": "0x8218028543a1b2c3448455667788449900aabb44ccddeeff4411223344"
+      }
+    },
+    {
+      "type": "SharesSubmitted",
+      "quarter": 7,
+      "blockNumber": 1842,
+      "txHash": "0xc03d581a9e6b274f0d18a35c9f24e70b6a1d8935ce420f7b16d905ae38c2714f",
+      "args": { "recipientCount": 5, "totalUsd": "24180.40" }
+    },
+    {
+      "type": "QuarterlyGateCheckResult",
+      "quarter": 7,
+      "blockNumber": 1842,
+      "txHash": "0x2a7f906cd3b18e45072c9a1fe6d830b45c18927ea03f6d1b8409c72de5a1b360",
+      "args": { "passed": true, "steps": 5 }
+    },
+    {
+      "type": "SharesSubmitted",
+      "quarter": 6,
+      "blockNumber": 1610,
+      "txHash": "0xb82e14d7c05a396fb47e2801d9c63a5f7e0942bd18c37e6a05b9d241fc830e57",
+      "args": { "recipientCount": 4, "totalUsd": "19870.05" }
+    },
+    {
+      "type": "QuarterlyGateCheckResult",
+      "quarter": 6,
+      "blockNumber": 1602,
+      "txHash": "0x2a7f906cd3b18e45072c9a1fe6d830b45c18927ea03f6d1b8409c72de5a1b360",
+      "args": { "passed": true, "steps": 4 }
+    },
+    {
+      "type": "SharesSubmitted",
+      "quarter": 4,
+      "blockNumber": 1121,
+      "txHash": "0x6d0a4f27e9b81c35d72046ab9f3e58c1074d2b6e8a5f9013c46b7d28e0f1a935",
+      "args": { "recipientCount": 3, "totalUsd": "12500.0" }
+    }
+  ],
+  "alerts": [],
+  "rehearsal": { "active": false, "step": 0, "totalSteps": 14, "label": null, "log": [] }
+}

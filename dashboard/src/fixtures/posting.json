@@ -1,0 +1,281 @@
+{
+  "network": {
+    "name": "devnet",
+    "chainId": 3141592,
+    "label": "Local devnet",
+    "epochSeconds": 30
+  },
+  "chain": {
+    "epoch": 1482,
+    "connected": true
+  },
+  "contracts": {
+    "sra": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    "swa": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+    "deployed": true
+  },
+  "wallet": {
+    "address": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "balanceFil": "9998.4207318452",
+    "minBalanceFil": "0.01",
+    "belowThreshold": false
+  },
+  "quarters": {
+    "activationEpoch": 0,
+    "epochsPerQuarter": 240,
+    "postPeriod": 120,
+    "verificationWindow": 40,
+    "currentQuarter": 6,
+    "phase": "posting",
+    "quarterStartEpoch": 1440,
+    "bindingEpoch": 1600,
+    "nextQuarterStartEpoch": 1680,
+    "epochsUntilNextPhase": 78
+  },
+  "sra": {
+    "lastSubmittedQuarter": 5,
+    "dueQuarter": 5,
+    "deadlineEpoch": 1600,
+    "missedQuarters": [],
+    "atRisk": false
+  },
+  "swa": {
+    "lastCheckedQuarter": 5,
+    "dueQuarter": 6,
+    "steps": 8,
+    "gateSteps": 8,
+    "nextThresholdUsd": "0.0",
+    "complete": true
+  },
+  "runs": [
+    {
+      "runId": "2026-09-17T14:58:02.410Z-c7d1",
+      "startedAt": "2026-09-17T14:58:02.410Z",
+      "finishedAt": "2026-09-17T14:58:02.984Z",
+      "durationMs": 574,
+      "network": "devnet",
+      "chainId": 3141592,
+      "epoch": 1482,
+      "cranker": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "balanceFil": "9998.4207318452",
+      "paused": false,
+      "pauseReason": null,
+      "actions": [
+        {
+          "call": "submitShares",
+          "quarter": 6,
+          "decision": "skipped",
+          "outcome": "not-due",
+          "reason": "NotBound(6)",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "info",
+          "message": "Quarter 6 is in its posting window. Binds at epoch 1600 \u2014 118 epochs away."
+        },
+        {
+          "call": "quarterlyGateCheck",
+          "quarter": 6,
+          "decision": "skipped",
+          "outcome": "gate-closed",
+          "reason": "StepsComplete()",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "info",
+          "message": "All 8 gate steps taken at epoch 1362. The stream-weight gate is closed for good; no further checks are needed."
+        }
+      ],
+      "schedule": {
+        "currentQuarter": 6,
+        "phase": "posting",
+        "submitDueQuarter": 5,
+        "submitDueAtEpoch": 1360,
+        "submitDeadlineEpoch": 1600,
+        "missedQuarters": [],
+        "gateDueQuarter": 6,
+        "gateDueAtEpoch": 1600,
+        "chainAgreesWithConfig": true,
+        "divergence": null
+      },
+      "exitCode": 0
+    },
+    {
+      "runId": "2026-09-17T14:55:01.997Z-9b3e",
+      "startedAt": "2026-09-17T14:55:01.997Z",
+      "finishedAt": "2026-09-17T14:55:02.511Z",
+      "durationMs": 514,
+      "network": "devnet",
+      "chainId": 3141592,
+      "epoch": 1476,
+      "cranker": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "balanceFil": "9998.4207318452",
+      "paused": false,
+      "pauseReason": null,
+      "actions": [
+        {
+          "call": "submitShares",
+          "quarter": 6,
+          "decision": "skipped",
+          "outcome": "not-due",
+          "reason": "NotBound(6)",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "info",
+          "message": "Quarter 6 is in its posting window. Binds at epoch 1600 \u2014 124 epochs away."
+        },
+        {
+          "call": "quarterlyGateCheck",
+          "quarter": 6,
+          "decision": "skipped",
+          "outcome": "gate-closed",
+          "reason": "StepsComplete()",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "info",
+          "message": "Gate closed at 8 of 8 steps. Nothing left to check."
+        }
+      ],
+      "schedule": {
+        "currentQuarter": 6,
+        "phase": "posting",
+        "submitDueQuarter": 5,
+        "submitDueAtEpoch": 1360,
+        "submitDeadlineEpoch": 1600,
+        "missedQuarters": [],
+        "gateDueQuarter": 6,
+        "gateDueAtEpoch": 1600,
+        "chainAgreesWithConfig": true,
+        "divergence": null
+      },
+      "exitCode": 0
+    },
+    {
+      "runId": "2026-09-17T14:52:01.640Z-4408",
+      "startedAt": "2026-09-17T14:52:01.640Z",
+      "finishedAt": "2026-09-17T14:52:02.803Z",
+      "durationMs": 1163,
+      "network": "devnet",
+      "chainId": 3141592,
+      "epoch": 1470,
+      "cranker": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "balanceFil": "9998.4207318452",
+      "paused": false,
+      "pauseReason": null,
+      "actions": [
+        {
+          "call": "submitShares",
+          "quarter": 6,
+          "decision": "skipped",
+          "outcome": "not-due",
+          "reason": "NotBound(6)",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "warn",
+          "message": "Schedule cross-check disagrees with config. Chain binding for quarter 5 resolved at epoch 1364; config/networks.json implies 1360. Using the chain value \u2014 verify postPeriod and verificationWindow."
+        },
+        {
+          "call": "quarterlyGateCheck",
+          "quarter": 6,
+          "decision": "skipped",
+          "outcome": "gate-closed",
+          "reason": "StepsComplete()",
+          "txHash": null,
+          "gasUsed": null,
+          "severity": "info",
+          "message": "Gate closed at 8 of 8 steps. Nothing left to check."
+        }
+      ],
+      "schedule": {
+        "currentQuarter": 6,
+        "phase": "posting",
+        "submitDueQuarter": 5,
+        "submitDueAtEpoch": 1360,
+        "submitDeadlineEpoch": 1600,
+        "missedQuarters": [],
+        "gateDueQuarter": 6,
+        "gateDueAtEpoch": 1600,
+        "chainAgreesWithConfig": false,
+        "divergence": "postPeriod + verificationWindow from config resolves binding(5) = 1360; aggregatedFilecoinPayVolume(5) first answered at 1364 (+4 epochs)."
+      },
+      "exitCode": 0
+    }
+  ],
+  "events": [
+    {
+      "type": "FvmActorCall",
+      "blockNumber": 1362,
+      "txHash": "0x4c21d8e95a7b03f16c8e2d40b9a75ce31f68042d7b5e9ac13860df24e7b1c095",
+      "args": {
+        "actorId": 2,
+        "method": 1129891158,
+        "methodName": "StepWeightRecords",
+        "paramsHex": "0x8208821a000186a01a0007a120"
+      }
+    },
+    {
+      "type": "QuarterlyGateCheckResult",
+      "quarter": 5,
+      "blockNumber": 1362,
+      "txHash": "0x4c21d8e95a7b03f16c8e2d40b9a75ce31f68042d7b5e9ac13860df24e7b1c095",
+      "args": {
+        "passed": true,
+        "steps": 8
+      }
+    },
+    {
+      "type": "FvmActorCall",
+      "blockNumber": 1362,
+      "txHash": "0x9f3c1a77b0d24e58c6a1f0e39b7d4c82a5e61f09d3b8c47e2a05f16d8c3b9e74",
+      "args": {
+        "actorId": 2,
+        "method": 3862548934,
+        "methodName": "SetShares",
+        "paramsHex": "0x8218028443a1b2c3448455667788449900aabb44ccddeeff"
+      }
+    },
+    {
+      "type": "SharesSubmitted",
+      "quarter": 5,
+      "blockNumber": 1362,
+      "txHash": "0x9f3c1a77b0d24e58c6a1f0e39b7d4c82a5e61f09d3b8c47e2a05f16d8c3b9e74",
+      "args": {
+        "recipientCount": 4,
+        "totalUsd": "18420.75"
+      }
+    },
+    {
+      "type": "SharesSubmitted",
+      "quarter": 4,
+      "blockNumber": 1121,
+      "txHash": "0x6d0a4f27e9b81c35d72046ab9f3e58c1074d2b6e8a5f9013c46b7d28e0f1a935",
+      "args": {
+        "recipientCount": 3,
+        "totalUsd": "12500.0"
+      }
+    },
+    {
+      "type": "QuarterlyGateCheckResult",
+      "quarter": 4,
+      "blockNumber": 1121,
+      "txHash": "0x7e5b2c90a413d867f0925e4bc18d306a7f24e9b05c3d817a2e6f40b9c85d1736",
+      "args": {
+        "passed": true,
+        "steps": 7
+      }
+    }
+  ],
+  "alerts": [
+    {
+      "at": "2026-09-17T14:52:02.803Z",
+      "severity": "warn",
+      "title": "Schedule cross-check divergence",
+      "body": "Chain binding for quarter 5 landed 4 epochs after the value implied by config/networks.json. POST_PERIOD and VERIFICATION_WINDOW are private immutables and cannot be read back, so config is the only source for them. Re-run npm run sync:deployments and confirm."
+    }
+  ],
+  "rehearsal": {
+    "active": false,
+    "step": 0,
+    "totalSteps": 14,
+    "label": null,
+    "log": []
+  }
+}

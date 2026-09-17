@@ -1,0 +1,746 @@
+[
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "owner1",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "owner2",
+        "type": "address"
+      },
+      {
+        "internalType": "Epoch",
+        "name": "hold",
+        "type": "uint64"
+      },
+      {
+        "internalType": "contract IServiceRewardsActor",
+        "name": "sra",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "target",
+        "type": "address"
+      }
+    ],
+    "name": "AddressEmptyCode",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "AlreadyApproved",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "owner",
+        "type": "address"
+      }
+    ],
+    "name": "AlreadyOwner",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "int256",
+        "name": "exitCode",
+        "type": "int256"
+      }
+    ],
+    "name": "CancelPendingFailed",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "CannotRemoveLastOwner",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "ERC1967InvalidImplementation",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ERC1967NonPayable",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "FailedCall",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "Epoch",
+        "name": "until",
+        "type": "uint64"
+      }
+    ],
+    "name": "HoldUntil",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidInitialization",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "MaximumOwnersReached",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NonzeroCallValue",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotInitializing",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "name": "NotOwner",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "int256",
+        "name": "exitCode",
+        "type": "int256"
+      }
+    ],
+    "name": "RegisterStreamFailed",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "int256",
+        "name": "exitCode",
+        "type": "int256"
+      }
+    ],
+    "name": "RemoveStreamFailed",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "int256",
+        "name": "exitCode",
+        "type": "int256"
+      }
+    ],
+    "name": "SetDistributionFailed",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "int256",
+        "name": "exitCode",
+        "type": "int256"
+      }
+    ],
+    "name": "SetWeightRecordsFailed",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "int256",
+        "name": "exitCode",
+        "type": "int256"
+      }
+    ],
+    "name": "StepWeightRecordsFailed",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "StepsComplete",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "StepsOutOfRange",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "taskId",
+        "type": "bytes32"
+      }
+    ],
+    "name": "TaskNotFound",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "UUPSUnauthorizedCallContext",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "slot",
+        "type": "bytes32"
+      }
+    ],
+    "name": "UUPSUnsupportedProxiableUUID",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "int256",
+        "name": "value",
+        "type": "int256"
+      }
+    ],
+    "name": "ValueOutOfRange",
+    "type": "error"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "taskId",
+        "type": "bytes32"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "owner",
+        "type": "address"
+      }
+    ],
+    "name": "Approved",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": false,
+        "internalType": "uint64",
+        "name": "version",
+        "type": "uint64"
+      }
+    ],
+    "name": "Initialized",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "owner",
+        "type": "address"
+      }
+    ],
+    "name": "OwnerAdded",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "owner",
+        "type": "address"
+      }
+    ],
+    "name": "OwnerRemoved",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "prevOwner",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "newOwner",
+        "type": "address"
+      }
+    ],
+    "name": "OwnerReplaced",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint64",
+        "name": "quarter",
+        "type": "uint64"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "passed",
+        "type": "bool"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint64",
+        "name": "steps",
+        "type": "uint64"
+      }
+    ],
+    "name": "QuarterlyGateCheckResult",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "taskId",
+        "type": "bytes32"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "owner",
+        "type": "address"
+      }
+    ],
+    "name": "Rejected",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "taskId",
+        "type": "bytes32"
+      }
+    ],
+    "name": "Submitted",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "implementation",
+        "type": "address"
+      }
+    ],
+    "name": "Upgraded",
+    "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "UPGRADE_INTERFACE_VERSION",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint64",
+        "name": "id",
+        "type": "uint64"
+      },
+      {
+        "internalType": "enum PendingOp",
+        "name": "op",
+        "type": "uint8"
+      }
+    ],
+    "name": "cancelPending",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "enum PendingOp",
+        "name": "op",
+        "type": "uint8"
+      }
+    ],
+    "name": "cancelPendingWeight",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "initialize",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "proxiableUUID",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "quarterlyGateCheck",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint64",
+        "name": "id",
+        "type": "uint64"
+      },
+      {
+        "components": [
+          {
+            "internalType": "int256",
+            "name": "vStart",
+            "type": "int256"
+          },
+          {
+            "internalType": "int256",
+            "name": "slope",
+            "type": "int256"
+          },
+          {
+            "internalType": "Epoch",
+            "name": "tStart",
+            "type": "uint64"
+          },
+          {
+            "internalType": "int256",
+            "name": "floor",
+            "type": "int256"
+          },
+          {
+            "internalType": "int256",
+            "name": "cap",
+            "type": "int256"
+          }
+        ],
+        "internalType": "struct WeightRecord",
+        "name": "record",
+        "type": "tuple"
+      },
+      {
+        "internalType": "address",
+        "name": "writer",
+        "type": "address"
+      },
+      {
+        "components": [
+          {
+            "internalType": "address",
+            "name": "wallet",
+            "type": "address"
+          },
+          {
+            "internalType": "FixedU18",
+            "name": "share",
+            "type": "uint256"
+          }
+        ],
+        "internalType": "struct Share[]",
+        "name": "shares",
+        "type": "tuple[]"
+      },
+      {
+        "internalType": "uint64",
+        "name": "activationEpoch",
+        "type": "uint64"
+      }
+    ],
+    "name": "registerStream",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint64",
+        "name": "id",
+        "type": "uint64"
+      },
+      {
+        "components": [
+          {
+            "internalType": "int256",
+            "name": "vStart",
+            "type": "int256"
+          },
+          {
+            "internalType": "int256",
+            "name": "slope",
+            "type": "int256"
+          },
+          {
+            "internalType": "Epoch",
+            "name": "tStart",
+            "type": "uint64"
+          },
+          {
+            "internalType": "int256",
+            "name": "floor",
+            "type": "int256"
+          },
+          {
+            "internalType": "int256",
+            "name": "cap",
+            "type": "int256"
+          }
+        ],
+        "internalType": "struct WeightRecord",
+        "name": "record",
+        "type": "tuple"
+      },
+      {
+        "internalType": "uint64",
+        "name": "activationEpoch",
+        "type": "uint64"
+      }
+    ],
+    "name": "registerStream",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint64",
+        "name": "id",
+        "type": "uint64"
+      }
+    ],
+    "name": "removeStream",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "prevOwner",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "newOwner",
+        "type": "address"
+      }
+    ],
+    "name": "replaceOwner",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint64",
+        "name": "id",
+        "type": "uint64"
+      },
+      {
+        "internalType": "address",
+        "name": "writer",
+        "type": "address"
+      }
+    ],
+    "name": "setDistribution",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "components": [
+              {
+                "internalType": "FixedU18",
+                "name": "base",
+                "type": "uint256"
+              },
+              {
+                "internalType": "FixedU18",
+                "name": "stepRatio",
+                "type": "uint256"
+              }
+            ],
+            "internalType": "struct VolumeTarget",
+            "name": "target",
+            "type": "tuple"
+          },
+          {
+            "internalType": "uint64",
+            "name": "steps",
+            "type": "uint64"
+          }
+        ],
+        "internalType": "struct GateParams",
+        "name": "params",
+        "type": "tuple"
+      }
+    ],
+    "name": "setGateParams",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint64",
+            "name": "id",
+            "type": "uint64"
+          },
+          {
+            "components": [
+              {
+                "internalType": "int256",
+                "name": "vStart",
+                "type": "int256"
+              },
+              {
+                "internalType": "int256",
+                "name": "slope",
+                "type": "int256"
+              },
+              {
+                "internalType": "Epoch",
+                "name": "tStart",
+                "type": "uint64"
+              },
+              {
+                "internalType": "int256",
+                "name": "floor",
+                "type": "int256"
+              },
+              {
+                "internalType": "int256",
+                "name": "cap",
+                "type": "int256"
+              }
+            ],
+            "internalType": "struct WeightRecord",
+            "name": "record",
+            "type": "tuple"
+          }
+        ],
+        "internalType": "struct WeightRecordUpdate[]",
+        "name": "updates",
+        "type": "tuple[]"
+      }
+    ],
+    "name": "setWeightRecords",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "newImplementation",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes",
+        "name": "data",
+        "type": "bytes"
+      }
+    ],
+    "name": "upgradeToAndCall",
+    "outputs": [],
+    "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "taskId",
+        "type": "bytes32"
+      }
+    ],
+    "name": "veto",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]

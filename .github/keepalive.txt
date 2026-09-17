@@ -1,0 +1,7 @@
+# Keepalive marker -- written weekly by .github/workflows/keepalive.yml.
+#
+# GitHub disables scheduled workflows in a public repository after 60 days
+# without repository activity. This commit is that activity. Nothing reads
+# this file; do not build anything on it.
+last-touched: never
+run: initial commit

@@ -1,0 +1,63 @@
+{
+  "$comment": [
+    "Quarter geometry mirrors filecoin-project/solstice deployments.json. Keep it in sync with",
+    "`npm run sync:deployments`, which pulls that file from upstream and rewrites addresses.",
+    "",
+    "IMPORTANT -- which of these the cranker actually trusts at runtime:",
+    "  activationEpoch   read from chain via quarterStart(0); the value here is a cross-check only",
+    "  epochsPerQuarter  read from chain via EPOCHS_PER_QUARTER(); the value here is a cross-check only",
+    "  postPeriod        CONFIG ONLY -- POST_PERIOD is `private immutable` on the SRA and cannot be read",
+    "  verificationWindow CONFIG ONLY -- same, VERIFICATION_WINDOW is `private immutable`",
+    "",
+    "So only postPeriod and verificationWindow can drift silently. The cranker cross-checks the",
+    "schedule they produce against aggregatedFilecoinPayVolume() on every run and alerts on divergence."
+  ],
+  "devnet": {
+    "chainId": 3141592,
+    "label": "Local devnet",
+    "rpcUrl": "http://127.0.0.1:8545",
+    "epochSeconds": 30,
+    "sra": "0x0000000000000000000000000000000000000000",
+    "swa": "0x0000000000000000000000000000000000000000",
+    "activationEpoch": 0,
+    "epochsPerQuarter": 240,
+    "postPeriod": 120,
+    "verificationWindow": 40,
+    "hold": 40,
+    "explorerTxUrl": null,
+    "minBalanceFil": "0.01",
+    "confirmations": 1
+  },
+  "calibnet": {
+    "chainId": 314159,
+    "label": "Filecoin Calibration",
+    "rpcUrl": "https://api.calibration.node.glif.io/rpc/v1",
+    "epochSeconds": 30,
+    "sra": "0x0000000000000000000000000000000000000000",
+    "swa": "0x0000000000000000000000000000000000000000",
+    "activationEpoch": 0,
+    "epochsPerQuarter": 2880,
+    "postPeriod": 240,
+    "verificationWindow": 480,
+    "hold": 720,
+    "explorerTxUrl": "https://calibration.filfox.info/en/message/",
+    "minBalanceFil": "0.1",
+    "confirmations": 1
+  },
+  "mainnet": {
+    "chainId": 314,
+    "label": "Filecoin Mainnet",
+    "rpcUrl": "https://api.node.glif.io/rpc/v1",
+    "epochSeconds": 30,
+    "sra": "0x0000000000000000000000000000000000000000",
+    "swa": "0x0000000000000000000000000000000000000000",
+    "activationEpoch": 0,
+    "epochsPerQuarter": 262974,
+    "postPeriod": 8640,
+    "verificationWindow": 20160,
+    "hold": 20160,
+    "explorerTxUrl": "https://filfox.info/en/message/",
+    "minBalanceFil": "0.1",
+    "confirmations": 2
+  }
+}

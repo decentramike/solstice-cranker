@@ -1,0 +1,39 @@
+{
+  "name": "solstice-cranker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Automated cranker for the two permissionless Solstice quarterly calls: submitShares(Q) on the SRA and quarterlyGateCheck() on the SWA.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "crank": "node scripts/crank.mjs",
+    "crank:dry": "CRANK_DRY_RUN=1 node scripts/crank.mjs",
+    "preflight": "node scripts/preflight.mjs",
+    "watchdog": "node scripts/watchdog.mjs",
+    "sync:deployments": "node scripts/sync-deployments.mjs",
+    "contracts:prepare": "node devnet/prepare-contracts.mjs",
+    "contracts:build": "npm run contracts:prepare && hardhat compile --config devnet/hardhat.config.cjs",
+    "abi:generate": "node devnet/generate-abi.mjs",
+    "devnet": "node devnet/node.mjs",
+    "devnet:deploy": "node devnet/deploy.mjs",
+    "rehearsal": "node devnet/rehearsal.mjs",
+    "demo": "node devnet/demo.mjs",
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
+    "test:integration": "node --test test/integration/*.test.mjs"
+  },
+  "dependencies": {
+    "ethers": "^6.13.4"
+  },
+  "devDependencies": {
+    "@openzeppelin/contracts": "5.7.0",
+    "hardhat": "^2.22.17"
+  },
+  "license": "Apache-2.0 OR MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/decentramike/solstice-cranker.git"
+  },
+  "homepage": "https://github.com/decentramike/solstice-cranker#readme"
+}

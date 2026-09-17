@@ -1,0 +1,13 @@
+node_modules/
+vendor/
+devnet/contracts/
+devnet/artifacts/
+devnet/cache/
+dashboard/dist/
+dashboard/node_modules/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.devnet-state.json

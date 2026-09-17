@@ -1,0 +1,12 @@
+diff --git a/README.md b/README.md
+index 6d9e230..5e9c3e4 100644
+--- a/README.md
++++ b/README.md
+@@ -36,6 +36,7 @@ Changes happen by pull request with public review — covering, but not limited
+ - FIP text: [FIP-0118](https://github.com/filecoin-project/FIPs/blob/master/FIPS/fip-0118.md)
+ - Reference indexer: TBD
+ - Settlement data and dashboards: TBD
++- Quarterly crank automation: [Solstice Cranker](https://github.com/decentramike/solstice-cranker) — the script, schedule and funded wallet that send the permissionless `SubmitShares(Q)` and `QuarterlyGateCheck()` calls each quarter (see [§4.5](docs/04-quarterly-review-and-runbook.md#45-permissionless-quarterly-cranks))
+ 
+ ## 1.5 Repository Maintainers
+ 

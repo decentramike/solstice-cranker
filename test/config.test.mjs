@@ -1,0 +1,414 @@
+/**
+ * src/config.mjs -- pause resolution, key validation, and redaction.
+ *
+ * Two things must hold no matter what:
+ *   - the pause rules are evaluated in UTC, because quarter boundaries are;
+ *   - no code path ever emits the private key or the RPC URL's path/query.
+ *
+ * No real key is used anywhere in this file. The well-formed placeholder below is a fixed
+ * byte pattern, it is never handed to a Wallet, and loadConfig only shape-checks it.
+ */
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+
+import {
+  ConfigError,
+  NETWORKS,
+  describeConfig,
+  loadConfig,
+  resolvePause,
+  safeHost,
+  truthy,
+} from '../src/config.mjs';
+
+/** A shape-valid placeholder, not a key: a fixed repeated byte, never used to sign anything. */
+const PLACEHOLDER_KEY = '0x' + '11'.repeat(32);
+
+const ENV_KEYS = [
+  'NETWORK',
+  'RPC_URL',
+  'CRANKER_PRIVATE_KEY',
+  'SRA_ADDRESS',
+  'SWA_ADDRESS',
+  'CRANK_PAUSED',
+  'CRANK_DISABLED_DAYS',
+  'CRANK_DISABLED_WEEKDAYS',
+  'CRANK_DRY_RUN',
+  'CRANK_MIN_BALANCE_FIL',
+  'CRANK_MAX_GATE_CATCHUP',
+  'CRANK_CONFIRMATIONS',
+  'CRANK_STATE_DIR',
+  'ALERT_TRANSPORT',
+];
+
+let saved;
+
+beforeEach(() => {
+  saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+  for (const k of ENV_KEYS) delete process.env[k];
+});
+
+afterEach(() => {
+  for (const k of ENV_KEYS) {
+    if (saved[k] === undefined) delete process.env[k];
+    else process.env[k] = saved[k];
+  }
+});
+
+const at = (iso) => new Date(iso);
+
+describe('resolvePause', () => {
+  it('is not paused with no pause environment at all', () => {
+    assert.deepEqual(resolvePause(at('2026-09-17T12:00:00Z')), { paused: false, reason: null });
+  });
+
+  describe('CRANK_PAUSED', () => {
+    for (const v of ['1', 'true', 'TRUE', 'yes', 'on', 'paused']) {
+      it(`pauses on ${JSON.stringify(v)}`, () => {
+        process.env.CRANK_PAUSED = v;
+        const r = resolvePause(at('2026-09-17T12:00:00Z'));
+        assert.equal(r.paused, true);
+        assert.match(r.reason, /CRANK_PAUSED/);
+      });
+    }
+
+    for (const v of ['', '0', 'false', 'FALSE', 'no', 'off']) {
+      it(`does not pause on ${JSON.stringify(v)}`, () => {
+        process.env.CRANK_PAUSED = v;
+        assert.equal(resolvePause(at('2026-09-17T12:00:00Z')).paused, false);
+      });
+    }
+
+    it('wins over the other rules', () => {
+      process.env.CRANK_PAUSED = '1';
+      process.env.CRANK_DISABLED_DAYS = '2026-09-27';
+      const r = resolvePause(at('2026-09-27T12:00:00Z'));
+      assert.match(r.reason, /CRANK_PAUSED/);
+    });
+  });
+
+  describe('CRANK_DISABLED_DAYS -- the rehearsal weekend', () => {
+    // The rehearsal deliberately leaves quarters 5 and 6 uncranked across 2026-09-27/28.
+    const REHEARSAL = '2026-09-27,2026-09-28';
+
+    for (const day of ['2026-09-27', '2026-09-28']) {
+      it(`${day} pauses`, () => {
+        process.env.CRANK_DISABLED_DAYS = REHEARSAL;
+        for (const t of ['00:00:00', '11:30:00', '23:59:59']) {
+          const r = resolvePause(at(`${day}T${t}Z`));
+          assert.equal(r.paused, true, `${day}T${t}Z`);
+          assert.match(r.reason, new RegExp(day));
+        }
+      });
+    }
+
+    it('the days on either side do not pause', () => {
+      process.env.CRANK_DISABLED_DAYS = REHEARSAL;
+      assert.equal(resolvePause(at('2026-09-26T23:59:59Z')).paused, false);
+      assert.equal(resolvePause(at('2026-09-29T00:00:00Z')).paused, false);
+    });
+
+    it('the boundary is UTC midnight, not local midnight', () => {
+      process.env.CRANK_DISABLED_DAYS = '2026-09-28';
+      // 23:30Z on the 27th is already the 28th in UTC+1..+12 and still the 27th in UTC.
+      assert.equal(resolvePause(at('2026-09-27T23:30:00Z')).paused, false);
+      assert.equal(resolvePause(at('2026-09-28T00:00:00Z')).paused, true);
+      // 00:30Z on the 29th is still the 28th in UTC-1..-12 but is the 29th in UTC.
+      assert.equal(resolvePause(at('2026-09-29T00:30:00Z')).paused, false);
+      assert.equal(resolvePause(at('2026-09-28T23:59:59Z')).paused, true);
+    });
+
+    it('tolerates spaces and trailing commas in the list', () => {
+      process.env.CRANK_DISABLED_DAYS = ' 2026-09-27 , 2026-09-28 ,';
+      assert.equal(resolvePause(at('2026-09-27T06:00:00Z')).paused, true);
+      assert.equal(resolvePause(at('2026-09-28T06:00:00Z')).paused, true);
+    });
+
+    it('an empty list pauses nothing', () => {
+      process.env.CRANK_DISABLED_DAYS = '';
+      assert.equal(resolvePause(at('2026-09-27T06:00:00Z')).paused, false);
+      process.env.CRANK_DISABLED_DAYS = ' , , ';
+      assert.equal(resolvePause(at('2026-09-27T06:00:00Z')).paused, false);
+    });
+  });
+
+  describe('CRANK_DISABLED_WEEKDAYS', () => {
+    it('matches the UTC weekday, case-insensitively', () => {
+      process.env.CRANK_DISABLED_WEEKDAYS = 'saturday,SUNDAY';
+      assert.equal(resolvePause(at('2026-09-26T12:00:00Z')).paused, true); // Saturday
+      assert.equal(resolvePause(at('2026-09-27T12:00:00Z')).paused, true); // Sunday
+      assert.equal(resolvePause(at('2026-09-28T12:00:00Z')).paused, false); // Monday
+      assert.match(resolvePause(at('2026-09-27T12:00:00Z')).reason, /Sunday \(UTC\)/);
+    });
+
+    it('uses the UTC weekday even when the local weekday differs', () => {
+      process.env.CRANK_DISABLED_WEEKDAYS = 'Sunday';
+      // 2026-09-28T00:30:00Z is Monday UTC but Sunday in every negative offset.
+      assert.equal(resolvePause(at('2026-09-28T00:30:00Z')).paused, false);
+      // 2026-09-27T23:30:00Z is Sunday UTC but Monday in every positive offset.
+      assert.equal(resolvePause(at('2026-09-27T23:30:00Z')).paused, true);
+    });
+
+    it('does not cover the whole rehearsal window on its own', () => {
+      // 2026-09-27 is a Sunday but 2026-09-28 is a Monday, so a Sat/Sun weekday rule leaves
+      // the second rehearsal day unpaused. CRANK_DISABLED_DAYS is the one that covers it.
+      process.env.CRANK_DISABLED_WEEKDAYS = 'Saturday,Sunday';
+      assert.equal(resolvePause(at('2026-09-27T12:00:00Z')).paused, true);
+      assert.equal(resolvePause(at('2026-09-28T12:00:00Z')).paused, false);
+    });
+
+    it('tolerates spaces', () => {
+      process.env.CRANK_DISABLED_WEEKDAYS = ' Sunday , Saturday ';
+      assert.equal(resolvePause(at('2026-09-27T12:00:00Z')).paused, true);
+    });
+  });
+
+  it('defaults to now when called with no argument', () => {
+    assert.equal(typeof resolvePause().paused, 'boolean');
+  });
+});
+
+describe('truthy', () => {
+  it('treats the usual off values as off and everything else as on', () => {
+    for (const v of [undefined, '', '0', 'false', 'FALSE', 'no', 'NO', 'off', 'OFF']) {
+      assert.equal(truthy(v), false, JSON.stringify(v));
+    }
+    for (const v of ['1', 'true', 'yes', 'on', 'anything']) {
+      assert.equal(truthy(v), true, JSON.stringify(v));
+    }
+  });
+});
+
+describe('CRANKER_PRIVATE_KEY validation', () => {
+  /** Nothing derived from `value` may appear in `message`. */
+  function assertNoLeak(message, value) {
+    assert.ok(!message.includes(value), 'the whole value leaked into the error message');
+    const stripped = value.replace(/^0x/, '');
+    for (let i = 0; i + 4 <= stripped.length; i++) {
+      const fragment = stripped.slice(i, i + 4);
+      assert.ok(
+        !message.includes(fragment),
+        `the error message contains a 4-character fragment of the value ("${fragment}")`
+      );
+    }
+  }
+
+  const MALFORMED = [
+    ['not hex at all', 'cafef00dbaadf00ddeadbeefsentinelvaluefeedfacefeedfacefeedfaceabc'],
+    ['one char short', '0x' + 'ab'.repeat(31) + 'c'],
+    ['one char long', '0x' + 'ab'.repeat(32) + 'c'],
+    ['missing 0x prefix', 'ab'.repeat(32)],
+    ['trailing newline', PLACEHOLDER_KEY + '\n'],
+    ['quoted', `"${PLACEHOLDER_KEY}"`],
+  ];
+
+  for (const [label, value] of MALFORMED) {
+    it(`rejects a ${label} key without echoing any of it`, () => {
+      process.env.NETWORK = 'devnet';
+      process.env.CRANKER_PRIVATE_KEY = value;
+
+      let err;
+      try {
+        loadConfig(process.env);
+      } catch (e) {
+        err = e;
+      }
+
+      assert.ok(err, 'a malformed key was accepted');
+      assert.ok(err instanceof ConfigError || err.isConfigError, 'not a ConfigError');
+      assert.match(err.message, /CRANKER_PRIVATE_KEY/);
+      assertNoLeak(err.message, value);
+      assertNoLeak(String(err.stack ?? ''), value);
+    });
+  }
+
+  it('rejects an absent key and points at the runbook', () => {
+    process.env.NETWORK = 'devnet';
+    let err;
+    try {
+      loadConfig(process.env);
+    } catch (e) {
+      err = e;
+    }
+    assert.ok(err);
+    assert.match(err.message, /CRANKER_PRIVATE_KEY is not set/);
+    assert.match(err.message, /WALLET\.md/);
+  });
+
+  it('accepts a shape-valid key', () => {
+    process.env.NETWORK = 'devnet';
+    process.env.CRANKER_PRIVATE_KEY = PLACEHOLDER_KEY;
+    assert.doesNotThrow(() => loadConfig(process.env));
+  });
+});
+
+describe('loadConfig', () => {
+  beforeEach(() => {
+    process.env.CRANKER_PRIVATE_KEY = PLACEHOLDER_KEY;
+  });
+
+  it('rejects an unknown NETWORK and lists the known ones', () => {
+    process.env.NETWORK = 'mainnetz';
+    assert.throws(() => loadConfig(process.env), (err) => {
+      assert.match(err.message, /unknown NETWORK "mainnetz"/);
+      assert.match(err.message, /devnet/);
+      assert.match(err.message, /calibnet/);
+      assert.match(err.message, /mainnet/);
+      assert.ok(!err.message.includes('$comment'), 'the $comment key leaked into the hint');
+      return true;
+    });
+  });
+
+  it('carries the quarter geometry as BigInt', () => {
+    process.env.NETWORK = 'calibnet';
+    const c = loadConfig(process.env);
+    for (const k of ['activationEpoch', 'epochsPerQuarter', 'postPeriod', 'verificationWindow', 'hold']) {
+      assert.equal(typeof c.quarters[k], 'bigint', k);
+      assert.equal(c.quarters[k], BigInt(NETWORKS.calibnet[k]), k);
+    }
+    assert.equal(typeof c.chainId, 'bigint');
+  });
+
+  it('marks a zero-address deployment as not deployed', () => {
+    process.env.NETWORK = 'devnet';
+    const c = loadConfig(process.env);
+    assert.equal(c.deployed, false);
+  });
+
+  it('an SRA_ADDRESS/SWA_ADDRESS override makes it deployed', () => {
+    process.env.NETWORK = 'devnet';
+    process.env.SRA_ADDRESS = '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512';
+    process.env.SWA_ADDRESS = '0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9';
+    const c = loadConfig(process.env);
+    assert.equal(c.deployed, true);
+    assert.equal(c.addresses.sra, '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512');
+  });
+
+  it('rejects a malformed address override', () => {
+    process.env.NETWORK = 'devnet';
+    process.env.SRA_ADDRESS = '0xnope';
+    assert.throws(() => loadConfig(process.env), /SRA_ADDRESS is not a valid address/);
+  });
+
+  it('bounds CRANK_MAX_GATE_CATCHUP', () => {
+    process.env.NETWORK = 'devnet';
+    for (const bad of ['0', '-1', '65', 'eight', '2.5']) {
+      process.env.CRANK_MAX_GATE_CATCHUP = bad;
+      assert.throws(() => loadConfig(process.env), /CRANK_MAX_GATE_CATCHUP/, `accepted ${bad}`);
+    }
+    process.env.CRANK_MAX_GATE_CATCHUP = '12';
+    assert.equal(loadConfig(process.env).maxGateCatchup, 12);
+    delete process.env.CRANK_MAX_GATE_CATCHUP;
+    assert.equal(loadConfig(process.env).maxGateCatchup, 8);
+  });
+
+  it('rejects a non-numeric CRANK_MIN_BALANCE_FIL', () => {
+    process.env.NETWORK = 'devnet';
+    process.env.CRANK_MIN_BALANCE_FIL = 'lots';
+    assert.throws(() => loadConfig(process.env), /CRANK_MIN_BALANCE_FIL/);
+  });
+
+  it('reads every setting from the `env` argument, including the secrets', () => {
+    // Regression: requiredEnv/optionalAddress read process.env directly, so loadConfig(env)
+    // honoured its argument for NETWORK and RPC_URL but silently ignored it for the three
+    // settings that matter most -- the key and the two addresses.
+    process.env.NETWORK = 'devnet';
+    process.env.SRA_ADDRESS = '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512';
+    process.env.CRANKER_PRIVATE_KEY = PLACEHOLDER_KEY;
+
+    const c = loadConfig({
+      NETWORK: 'calibnet',
+      CRANKER_PRIVATE_KEY: PLACEHOLDER_KEY,
+      SRA_ADDRESS: '0x1111111111111111111111111111111111111111',
+      SWA_ADDRESS: '0x2222222222222222222222222222222222222222',
+    });
+
+    assert.equal(c.networkName, 'calibnet');
+    assert.equal(c.addresses.sra, '0x1111111111111111111111111111111111111111');
+    assert.equal(c.addresses.swa, '0x2222222222222222222222222222222222222222');
+  });
+
+  it('finds a key passed in the argument even with requireKey false', () => {
+    const c = loadConfig({ NETWORK: 'calibnet', CRANKER_PRIVATE_KEY: PLACEHOLDER_KEY }, { requireKey: false });
+    assert.equal(c.privateKey, PLACEHOLDER_KEY);
+  });
+
+  it('does not pick up a key from process.env when the argument omits it', () => {
+    process.env.CRANKER_PRIVATE_KEY = PLACEHOLDER_KEY;
+    const c = loadConfig({ NETWORK: 'calibnet' }, { requireKey: false });
+    assert.equal(c.privateKey, null, 'the argument is the whole environment, ambient state is not');
+  });
+});
+
+describe('describeConfig never leaks a secret', () => {
+  const SECRET_PATH_SEGMENT = 'sk-live-abcdef0123456789';
+  const SECRET_QUERY_VALUE = 'qk-live-9876543210fedcba';
+
+  beforeEach(() => {
+    process.env.NETWORK = 'calibnet';
+    process.env.CRANKER_PRIVATE_KEY = PLACEHOLDER_KEY;
+    process.env.RPC_URL = `https://rpc.example.com/v1/${SECRET_PATH_SEGMENT}?apiKey=${SECRET_QUERY_VALUE}`;
+  });
+
+  it('omits the private key entirely', () => {
+    const described = describeConfig(loadConfig(process.env));
+    const serialised = JSON.stringify(described);
+    assert.ok(!serialised.includes(PLACEHOLDER_KEY));
+    assert.ok(!serialised.includes(PLACEHOLDER_KEY.slice(2)));
+    assert.ok(!serialised.includes('1111'));
+    assert.ok(!Object.keys(described).some((k) => /key|secret|private/i.test(k)));
+    for (const v of Object.values(described)) {
+      assert.notEqual(v, PLACEHOLDER_KEY);
+    }
+  });
+
+  it('reduces the RPC URL to a host, dropping path and query', () => {
+    const described = describeConfig(loadConfig(process.env));
+    const serialised = JSON.stringify(described);
+    assert.equal(described.rpcHost, 'rpc.example.com');
+    assert.ok(!serialised.includes(SECRET_PATH_SEGMENT), 'the RPC path leaked');
+    assert.ok(!serialised.includes(SECRET_QUERY_VALUE), 'the RPC query leaked');
+    assert.ok(!serialised.includes('apiKey'));
+    assert.ok(!serialised.includes('/v1/'));
+  });
+
+  it('keeps the alert API keys out of it too', () => {
+    process.env.SENDGRID_API_KEY = 'SG.leak-me-not';
+    try {
+      const serialised = JSON.stringify(describeConfig(loadConfig(process.env)));
+      assert.ok(!serialised.includes('SG.leak-me-not'));
+    } finally {
+      delete process.env.SENDGRID_API_KEY;
+    }
+  });
+
+  it('describes the fields the operator needs and nothing secret-shaped', () => {
+    const described = describeConfig(loadConfig(process.env));
+    for (const key of ['network', 'chainId', 'rpcHost', 'sra', 'swa', 'deployed', 'dryRun']) {
+      assert.ok(key in described, `describeConfig no longer reports ${key}`);
+    }
+    // Deliberately a property rather than a fixed key list: a new field is fine, a field that
+    // looks like a credential is not, and neither is a nested object -- that is how a whole
+    // config object ends up in a log by accident.
+    for (const [key, value] of Object.entries(described)) {
+      assert.ok(!/key|secret|private|password|token|mnemonic/i.test(key), `suspicious field: ${key}`);
+      assert.notEqual(typeof value, 'object', `${key} is not a scalar`);
+      assert.notEqual(typeof value, 'function', `${key} is not a scalar`);
+    }
+  });
+});
+
+describe('safeHost', () => {
+  it('returns the host with its port and nothing else', () => {
+    assert.equal(safeHost('https://api.node.glif.io/rpc/v1'), 'api.node.glif.io');
+    assert.equal(safeHost('http://127.0.0.1:8545'), '127.0.0.1:8545');
+    assert.equal(safeHost('https://user:pw@h.example.com/p?q=1#f'), 'h.example.com');
+  });
+
+  it('never throws, and never echoes an unparseable value', () => {
+    for (const bad of ['', 'not a url', undefined, null]) {
+      const out = safeHost(bad);
+      assert.equal(out, '<unparseable RPC_URL>');
+    }
+  });
+});

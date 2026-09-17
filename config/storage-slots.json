@@ -1,0 +1,27 @@
+{
+  "$comment": [
+    "ERC-7201 namespaced storage slots, copied from the upstream libraries. The cranker reads these",
+    "directly with eth_getStorageAt because the values they hold have no public getter, and knowing",
+    "them turns 'is a crank due?' from a guess into a fact.",
+    "",
+    "Source: src/lib/SraStorage.sol and src/lib/GateParams.sol in filecoin-project/solstice."
+  ],
+  "sraQuarter": {
+    "slot": "0x347e624280399e1e720d839edbd7cd00c80c69bf34cd8ee59e27f691732af300",
+    "layout": [
+      { "word": 0, "offsetBytes": 0, "bytes": 8, "name": "lastSubmittedQuarter", "type": "uint64" },
+      { "word": 0, "offsetBytes": 8, "bytes": 8, "name": "mirrorAQuarter", "type": "uint64", "note": "stores quarter + 1; 0 = never written" },
+      { "word": 0, "offsetBytes": 16, "bytes": 8, "name": "mirrorBQuarter", "type": "uint64", "note": "stores quarter + 1; 0 = never written" }
+    ]
+  },
+  "swaGateParams": {
+    "slot": "0xf9abab00248d945495524c8caf6be2b837274c1becd1964fb3775f62fd6e4600",
+    "layout": [
+      { "word": 0, "offsetBytes": 0, "bytes": 8, "name": "lastCheckedQuarter", "type": "uint64" },
+      { "word": 1, "offsetBytes": 0, "bytes": 32, "name": "targetBase", "type": "FixedU18" },
+      { "word": 2, "offsetBytes": 0, "bytes": 32, "name": "targetStepRatio", "type": "FixedU18" },
+      { "word": 3, "offsetBytes": 0, "bytes": 8, "name": "steps", "type": "uint64" }
+    ],
+    "gateSteps": 8
+  }
+}

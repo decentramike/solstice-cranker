@@ -1,0 +1,18 @@
+## 4.5 Permissionless quarterly cranks
+
+Two calls must be sent on chain every quarter, and nothing on chain sends them.
+
+| Call | Contract | How late is too late |
+| :-- | :-- | :-- |
+| `SubmitShares(Q)` | Service Rewards Actor | Hard deadline. It must land before quarter Q+1 binds. After that it reverts `NotLatestQuarter(Q)`, quarter Q's wallet-to-share map is never installed, and there is no way to install it later. Registry changes are affected too: `RemoveOrchestrator` reverts `PendingShares(q)` while the current quarter's share map is outstanding. |
+| `QuarterlyGateCheck()` | Stream Weight Actor | No deadline. Lateness delays the corresponding w2 step by exactly as long as the call is late. |
+
+Both are permissionless: any wallet holding gas can send either, and neither requires a Safe approval, an Orchestrator key, or any other authorisation. That is the design (see §2.2.9 in [SWA Governance Tier — Tasks and Actions](02-solstice-program-governance.md#22-swa-governance-tier--tasks-and-actions) and §2.3.10 in [SRA Governance Tier — Tasks and Actions](02-solstice-program-governance.md#23-sra-governance-tier--tasks-and-actions)). It also means nobody is assigned to send them, which is what the automation below is for.
+
+**The automation.** The [Solstice Cranker](https://github.com/decentramike/solstice-cranker) is the script, schedule and funded wallet that send both calls. It runs hourly, reads chain state, sends only what is due, and raises an alert when a crank does not land. Its wallet holds gas and nothing else — no role, no permission and no Safe membership on either contract — so operating it confers no authority over the program and grants its operator nothing a community member does not already have.
+
+**It is a convenience, not a dependency.** Because both calls are permissionless, any community member with a funded wallet can send them if the automation fails, and doing so is a normal outcome rather than an intervention. The oversight duty in §2.2.9 and §2.3.10 — confirm each call has run, and that `SubmitShares` wrote the correct map — is unchanged by the cranker's existence. The tiers verify the result; they do not rely on any particular sender producing it.
+
+**Operational owner.** Filecoin Foundation operates the cranker, with @decentramike as owner and a named backup recorded in the cranker repository's runbook. Alerting, wallet funding, key rotation and the RPC and address change procedures live there.
+
+**When a crank is missed.** A late `QuarterlyGateCheck()` is self-correcting: send it. A missed `SubmitShares(Q)` is not. That quarter's share map is permanently absent, the affected Orchestrators' quarterly reports for Q will not reconcile against an on-chain map, and the correct response is to record the loss — here and in the quarter's reporting issue — rather than to attempt a resubmission that the contract will reject.
