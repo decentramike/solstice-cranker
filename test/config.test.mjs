@@ -88,10 +88,17 @@ describe('resolvePause', () => {
   });
 
   describe('CRANK_DISABLED_DAYS -- the rehearsal weekend', () => {
-    // The rehearsal deliberately leaves quarters 5 and 6 uncranked across 2026-09-27/28.
-    const REHEARSAL = '2026-09-27,2026-09-28';
+    // The rehearsal has TWO no-crank weekends, from the rehearsal plan (activation
+    // Wed 2026-09-23 13:00 UTC, one quarter per day):
+    //   Q3  binds Sat 2026-09-26 19:00 -- "weekend post, no cranks"
+    //   Q4  binds Sun 2026-09-27 19:00 -- "weekend fail, no action"
+    //   Q10 binds Sat 2026-10-03 19:00 -- "weekend post, no cranks"
+    //   Q11 binds Sun 2026-10-04 19:00 -- "weekend, no action"
+    // Quarters bind at 19:00 (the 13:00 boundary + POST 2h + VERIFY 4h), so pausing on
+    // those calendar dates is what suppresses the cranks for those quarters.
+    const REHEARSAL = '2026-09-26,2026-09-27,2026-10-03,2026-10-04';
 
-    for (const day of ['2026-09-27', '2026-09-28']) {
+    for (const day of ['2026-09-26', '2026-09-27', '2026-10-03', '2026-10-04']) {
       it(`${day} pauses`, () => {
         process.env.CRANK_DISABLED_DAYS = REHEARSAL;
         for (const t of ['00:00:00', '11:30:00', '23:59:59']) {
@@ -104,8 +111,28 @@ describe('resolvePause', () => {
 
     it('the days on either side do not pause', () => {
       process.env.CRANK_DISABLED_DAYS = REHEARSAL;
-      assert.equal(resolvePause(at('2026-09-26T23:59:59Z')).paused, false);
-      assert.equal(resolvePause(at('2026-09-29T00:00:00Z')).paused, false);
+      // Friday 25th: Q2 must still be cranked.
+      assert.equal(resolvePause(at('2026-09-25T23:59:59Z')).paused, false);
+      // Monday 28th: the Q5 cycle and the catch-up for Q3/Q4 happen on this day.
+      assert.equal(resolvePause(at('2026-09-28T00:00:00Z')).paused, false);
+      // Friday 2nd and Monday 5th, either side of the second weekend.
+      assert.equal(resolvePause(at('2026-10-02T23:59:59Z')).paused, false);
+      assert.equal(resolvePause(at('2026-10-05T00:00:00Z')).paused, false);
+    });
+
+    it('the crank that binds at 19:00 on each no-crank day is suppressed', () => {
+      process.env.CRANK_DISABLED_DAYS = REHEARSAL;
+      // Binding time is the moment that matters: 13:00 boundary + POST 2h + VERIFY 4h.
+      for (const day of ['2026-09-26', '2026-09-27', '2026-10-03', '2026-10-04']) {
+        assert.equal(resolvePause(at(`${day}T19:00:00Z`)).paused, true, `${day} 19:00Z`);
+      }
+    });
+
+    it('does NOT suppress the Monday catch-ups', () => {
+      process.env.CRANK_DISABLED_DAYS = REHEARSAL;
+      // The plan schedules these for 13:15 onward, actor "Any".
+      assert.equal(resolvePause(at('2026-09-28T13:15:00Z')).paused, false);
+      assert.equal(resolvePause(at('2026-10-05T13:30:00Z')).paused, false);
     });
 
     it('the boundary is UTC midnight, not local midnight', () => {
@@ -119,9 +146,9 @@ describe('resolvePause', () => {
     });
 
     it('tolerates spaces and trailing commas in the list', () => {
-      process.env.CRANK_DISABLED_DAYS = ' 2026-09-27 , 2026-09-28 ,';
+      process.env.CRANK_DISABLED_DAYS = ' 2026-09-26 , 2026-09-27 ,';
+      assert.equal(resolvePause(at('2026-09-26T06:00:00Z')).paused, true);
       assert.equal(resolvePause(at('2026-09-27T06:00:00Z')).paused, true);
-      assert.equal(resolvePause(at('2026-09-28T06:00:00Z')).paused, true);
     });
 
     it('an empty list pauses nothing', () => {

@@ -221,14 +221,33 @@ The response is escalation and documentation.
 
 ## The rehearsal weekend: pause and un-pause
 
-Phase 1 is fourteen daily quarters on calibnet, 23 September to 7 October 2026, with 19:00
-UTC boundaries. Q5 (Saturday 27 September) and Q6 (Sunday 28 September) deliberately test
-what happens when nobody cranks. Monday's Q7 catch-up is sent by hand.
+Phase 1 is one governance quarter per day on calibnet, activation Wednesday 23 September
+2026 13:00 UTC through Wednesday 7 October.
 
-### Before the weekend — by Friday 26 September
+**Two clocks, six hours apart.** The quarter boundary is **13:00 UTC** (quarter Q runs 13:00
+to 13:00). Binding is **19:00 UTC** — boundary plus `POST_PERIOD` 2 h plus
+`VERIFICATION_WINDOW` 4 h — and binding is when `submitShares(Q)` becomes callable, so 19:00
+is when the cranker acts. Posting for Q opens only after Q has ended, so each quarter's
+cycle runs on the following day.
+
+**There are two no-crank weekends, not one:**
+
+| Quarter | Binds | Scenario |
+| :-- | :-- | :-- |
+| Q3 | Sat 26 Sep 19:00 | Weekend post, no cranks. Value binds and waits for Monday. |
+| Q4 | Sun 27 Sep 19:00 | Weekend fail. Binds 0. |
+| Q10 | Sat 03 Oct 19:00 | Weekend post, no cranks. |
+| Q11 | Sun 04 Oct 19:00 | Weekend, no action. |
+
+Catch-up runs Monday 28 September (Q5 cycle) and Monday 5 October (Q12 cycle). The
+rehearsal plan gives the actor for every catch-up call as "Any" — these are permissionless,
+so either the cranker or a person can send them.
+
+### Before the weekend — by Friday 25 September
 
 1. Settings → Secrets and variables → Actions → **Variables** → **New repository variable**.
-2. Name `CRANK_DISABLED_DAYS`, value `2026-09-27,2026-09-28`.
+2. Name `CRANK_DISABLED_DAYS`, value `2026-09-26,2026-09-27,2026-10-03,2026-10-04`.
+   Set all four dates now; do not come back for the second weekend.
 3. Actions → *Solstice crank* → **Run workflow** with **dry_run** checked, and confirm the
    output says it is disabled for those dates. Do this on Friday, not on Saturday — you
    want to find a typo while there is time to fix it.
@@ -240,9 +259,29 @@ on if you are hit by a bus on Sunday.
 
 The watchdog will notice the missed cranks and open an issue. That is correct — it is what
 the weekend is testing. Leave the issue open, note in a comment that it is the planned
-Q5/Q6 test, and close it after the Monday catch-up.
+Q3/Q4 (or Q10/Q11) test, and close it after the Monday catch-up.
 
-### Monday 29 September — the Q7 catch-up, by hand
+### The share maps these weekends destroy — expected, and not recoverable
+
+Each weekend permanently loses one quarter's share map, by design. On the Monday, one
+`SubmitShares` installs the *latest* bound quarter's map and supersedes the earlier one:
+Q3 is superseded by Q4's submission, and Q10 by Q11's. `submitShares` only ever accepts the
+latest bound quarter, so there is no ordering that saves both.
+
+The cranker reports this as a **critical alert and exits 1** on the run that first sees the
+gap, and names the lost quarter in `schedule.missedQuarters`. **That is the rehearsal
+working.** Note it against the planned scenario and move on. Do not treat it as a cranker
+defect, and do not attempt a resubmission — the contract will reject it.
+
+### Monday 28 September (and Monday 5 October) — the catch-up
+
+The plan schedules Monday's catch-up for 13:15–13:45 UTC on 28 September and 13:30 onward
+on 5 October. Date-based pausing releases the cranker at 00:00 UTC Monday, so it will catch
+up on its first hourly run — same end state, roughly twelve hours earlier than the script.
+If the watchtower needs the scripted timestamps, disable the workflow in the Actions tab for
+the weekend instead and re-enable it around 13:00 Monday.
+
+To send the catch-up by hand instead:
 
 Send the outstanding calls manually, in a fixed order, one at a time, confirming each
 before starting the next. Record the transaction hash of each.

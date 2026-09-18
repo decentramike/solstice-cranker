@@ -58,20 +58,32 @@ const TOPIC = {
 };
 
 /**
- * Calendar labels. The brief anchors the rehearsal at Wed 2026-09-23 and separately calls Q5/Q6
- * the weekend with Q7 the Monday catch-up; those two disagree by a day (from a Wednesday Q1 the
- * weekend is Q4/Q5). The quarter NUMBERS carry the assertions, so they win -- these dates are
- * decoration and are printed alongside the real weekday so the skew stays visible.
+ * Calendar labels, from the rehearsal plan: activation Wed 2026-09-23 13:00 UTC, one quarter
+ * per day, and posting for quarter Q opens only after Q has ended -- so quarter Q's CYCLE runs
+ * on the following day. Q1 = Wed 13:00 to Thu 13:00, cycled Thu 24 Sep.
+ *
+ * That puts the plan's two no-crank weekends at Q3/Q4 (Sat 26, Sun 27 Sep) and Q10/Q11
+ * (Sat 3, Sun 4 Oct), with the catch-ups on Q5 (Mon 28 Sep) and Q12 (Mon 5 Oct). This replay
+ * uses the same numbering so it is a dry run of the real thing rather than an analogy.
  */
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 function calendarLabel(q) {
-  const d = new Date(Date.UTC(2026, 8, 22 + q));
+  const d = new Date(Date.UTC(2026, 8, 23 + q));
   return `${d.toISOString().slice(0, 10)} ${DAYS[d.getUTCDay()]}`;
 }
 
-/** Quarterly USD volume the orchestrator posts. Q2 is deliberately under the 3500 gate entry. */
+/** The plan's no-crank weekend quarters. Q4 and Q11 additionally receive no volume at all. */
+const WEEKEND_QUARTERS = new Set([3, 4, 10, 11]);
+const NO_POST_QUARTERS = new Set([4, 11]);
+
+/**
+ * Quarterly USD volume the orchestrator posts, following the plan:
+ *   Q1  bootstrap, no gate
+ *   Q2  first gate pass -- above the 3500 entry threshold, steps the weight
+ *   Q3  weekend post, HIGH, but nobody cranks it
+ *   Q4  weekend fail -- nothing posted at all, so the value binds 0 and its gate check fails
+ */
 function volumeFor(q) {
-  if (q === 2) return '1000';
   if (q === 1) return '5000';
   return '100000000';
 }
@@ -278,9 +290,14 @@ async function runQuarter(q, d, fast) {
   // --- posting window -----------------------------------------------------
   const now = await currentEpoch();
   if (now < start) await mineTo(start);
-  const volume = volumeFor(q);
-  await postVolume(q, volume);
-  console.log(`  posted ${volume} USD for Q${q}`);
+  if (NO_POST_QUARTERS.has(q)) {
+    // The plan's "weekend fail": no PostVolume and no CorrectVolume, so the value binds 0.
+    console.log(`  posted nothing for Q${q} -- binds 0 (weekend fail)`);
+  } else {
+    const volume = volumeFor(q);
+    await postVolume(q, volume);
+    console.log(`  posted ${volume} USD for Q${q}`);
+  }
 
   // --- Q1 only: the three submitShares outcomes, in order -----------------
   if (q === 1) {
@@ -330,8 +347,8 @@ async function runQuarter(q, d, fast) {
     return;
   }
 
-  // --- Q5/Q6: the cranker is paused for the weekend -----------------------
-  if (q === 5 || q === 6) {
+  // --- the plan's no-crank weekends: Q3/Q4 and Q10/Q11 --------------------
+  if (WEEKEND_QUARTERS.has(q)) {
     const before = await chainSnapshot();
     const r = await crank({ paused: true });
     const after = await chainSnapshot();
@@ -353,11 +370,11 @@ async function runQuarter(q, d, fast) {
     // boundary does not defer those quarters, it destroys them. Q5's and Q6's share maps can
     // never be installed once Q7 binds. Assert the cranker says so out loud.
     const missed = (r.runs.at(-1)?.schedule?.missedQuarters) ?? [];
-    if (q === 6) {
+    if (q === 4) {
       check(
         'S5  ... and reports the quarter the pause has already cost',
-        missed.includes(5) && r.exitCode === 1,
-        `missedQuarters ${JSON.stringify(missed)}, exit 1 -- Q5's share map is gone for good`,
+        missed.includes(3) && r.exitCode === 1,
+        `missedQuarters ${JSON.stringify(missed)}, exit 1 -- Q3's share map is gone for good`,
         `missedQuarters ${JSON.stringify(missed)}, exit ${r.exitCode} (wanted 5 reported and exit 1)`
       );
     }
@@ -401,16 +418,6 @@ async function runQuarter(q, d, fast) {
   // Q2's volume is under the entry threshold, so its gate check must fail without stepping.
   if (q === 2) {
     check(
-      'S8a Below-threshold quarter fails the gate without stepping',
-      stepAdvance === 0 && fvm.length === 0,
-      `steps held at ${after.gate.steps}, no FvmActorCall`,
-      `steps moved by ${stepAdvance}, ${fvm.length} FvmActorCall logs`
-    );
-  }
-
-  // Q3 is the first quarter over the threshold.
-  if (q === 3) {
-    check(
       'S8b Above-threshold quarter passes and steps the weight',
       stepAdvance === 1 && fvm.length >= 1,
       `steps -> ${after.gate.steps}, ${fvm.length} FvmActorCall log(s)`,
@@ -418,16 +425,29 @@ async function runQuarter(q, d, fast) {
     );
   }
 
+  // Q3 is the first quarter over the threshold.
+
   // Q7 is the Monday after the paused weekend: the gate is two quarters behind and one run
   // has to close the whole gap.
-  if (q === 7) {
+  if (q === 5) {
     check(
-      // Not exit 0: the Monday run is the first to see that the weekend cost Q5 and Q6,
-      // and reporting that is a critical finding. The claim here is only about catch-up.
+      // Not exit 0: the Monday run is the first to see that the weekend cost Q3, and
+      // reporting that is a critical finding. The claim here is only about catch-up.
       'S6  Monday catch-up closes multiple gate quarters in one run',
       gateAdvance >= 2,
       `gate advanced ${gateAdvance} quarters in a single run`,
       `gate advanced ${gateAdvance} (wanted >= 2)`
+    );
+    check(
+      // The plan: "Gate checks catch up in order: Q3 passes, Q4 fails and the residual
+      // burns." By Monday, Q5 is bound too, so the run catches up Q3, Q4 AND Q5. The
+      // invariant is not a fixed step count but that the one zero-bound quarter advanced
+      // the gate pointer WITHOUT consuming a step: steps move one fewer than the pointer.
+      'S8a Catch-up steps for every quarter that cleared the threshold, and only those',
+      gateAdvance >= 2 && stepAdvance === gateAdvance - 1,
+      `gate advanced ${gateAdvance}, weight stepped ${stepAdvance} -- Q4 bound 0, moved the ` +
+        'pointer and burned the residual without taking a step',
+      `gate advanced ${gateAdvance}, weight stepped ${stepAdvance} (wanted ${gateAdvance - 1})`
     );
   }
 
@@ -482,10 +502,13 @@ async function runQuarter(q, d, fast) {
   // The run that takes the eighth step completes the gate.
   if (!before.gate.complete && after.gate.complete) {
     check(
+      // The claim is about the gate reaching its cap. The exit code is not folded in:
+      // this run is also the first after the second no-crank weekend, so it is correctly
+      // reporting the quarter that weekend cost and correctly exiting 1.
       `S9  Q${q} takes the eighth and final gate step`,
-      r.exitCode === 0 && after.gate.steps === after.gate.gateSteps,
-      `steps ${after.gate.steps}/${after.gate.gateSteps}, gate complete`,
-      `exit ${r.exitCode}, steps ${after.gate.steps}/${after.gate.gateSteps}`
+      after.gate.steps === after.gate.gateSteps && after.gate.complete,
+      `steps ${after.gate.steps}/${after.gate.gateSteps}, gate complete, exit ${r.exitCode}`,
+      `steps ${after.gate.steps}/${after.gate.gateSteps}, complete=${after.gate.complete}`
     );
   }
 

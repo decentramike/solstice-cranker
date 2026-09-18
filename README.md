@@ -85,7 +85,7 @@ version; this table is the short one. Three further variables (`CRANK_CONFIRMATI
 | `SRA_ADDRESS` | variable | no | Overrides the committed SRA address. Set this when the deployment lands or moves. |
 | `SWA_ADDRESS` | variable | no | Same, for the SWA. |
 | `CRANK_PAUSED` | variable | no | Any truthy value: read state and report, send nothing. The big red switch. |
-| `CRANK_DISABLED_DAYS` | variable | no | Comma-separated UTC dates on which not to send. Used for the rehearsal's Q5/Q6 weekend. |
+| `CRANK_DISABLED_DAYS` | variable | no | Comma-separated UTC dates on which not to send. The rehearsal's two no-crank weekends: `2026-09-26,2026-09-27,2026-10-03,2026-10-04`. |
 | `CRANK_DISABLED_WEEKDAYS` | variable | no | Same idea, recurring: `Saturday,Sunday`. |
 | `CRANK_DRY_RUN` | dispatch input | no | Simulate and report, broadcast nothing. |
 | `CRANK_MAX_GATE_CATCHUP` | variable | no | Cap on `quarterlyGateCheck()` calls in one run while catching up. Default 8. |
@@ -126,18 +126,48 @@ npm run crank        # decide and send
 
 ## Pausing for the rehearsal weekend
 
-Phase 1 is a calibnet rehearsal, 23 September to 7 October 2026: fourteen daily quarters
-with 19:00 UTC boundaries. Quarters Q5 and Q6 — Saturday 27 and Sunday 28 September — are
-a deliberate test of what happens when nobody cranks. The cranker must be off for those
-two days, and Monday's Q7 catch-up is sent by hand, in a fixed order.
+Phase 1 is a calibnet rehearsal, activation Wednesday 23 September 2026 13:00 UTC through
+Wednesday 7 October, one governance quarter per day.
 
-Set the repository variable `CRANK_DISABLED_DAYS` to `2026-09-27,2026-09-28` before the
-weekend. The workflow still runs hourly, still reads chain state, still reports — and
-sends nothing on those dates. That is better than disabling the workflow, because you keep
-the observability and there is nothing to remember to switch back on.
+Two clocks matter and they are six hours apart:
 
-Full procedure, including the un-pause and the manual Q7 catch-up, is in
-[`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+- **Quarter boundary — 13:00 UTC.** Quarter Q runs 13:00 to 13:00. Posting for Q opens only
+  once Q has ended, so each quarter's cycle runs on the *following* day.
+- **Binding — 19:00 UTC.** Boundary + `POST_PERIOD` (2 h) + `VERIFICATION_WINDOW` (4 h).
+  This is when `submitShares(Q)` becomes callable, so it is when the cranker acts.
+
+**There are two "nobody cranks" weekends, not one.** Per the rehearsal plan:
+
+| Quarter | Binds | What it tests |
+| :-- | :-- | :-- |
+| Q3 | Sat 26 Sep 19:00 UTC | Weekend post, no cranks. Value binds and waits for Monday. |
+| Q4 | Sun 27 Sep 19:00 UTC | Weekend fail. Binds 0. Two quarters bound with no SubmitShares and no gate check. |
+| Q10 | Sat 03 Oct 19:00 UTC | Weekend post, no cranks. |
+| Q11 | Sun 04 Oct 19:00 UTC | Weekend, no action. |
+
+Set the repository variable `CRANK_DISABLED_DAYS` to:
+
+```
+2026-09-26,2026-09-27,2026-10-03,2026-10-04
+```
+
+The workflow still runs hourly, still reads chain state, still reports — and sends nothing
+on those dates. That is better than disabling the workflow, because you keep the
+observability and there is nothing to remember to switch back on.
+
+**Those weekends permanently destroy two share maps, by design.** Q3 is superseded when the
+Monday catch-up submits Q4, and Q10 when Q12's catch-up submits Q11. The cranker reports
+each as a critical alert and exits 1. That is the rehearsal working, not the cranker
+failing — see `docs/RUNBOOK.md` before anyone escalates it.
+
+**Timing note for the Monday catch-up.** The plan schedules it for Mon 13:15–13:45 UTC
+(Q5 cycle) and Mon 13:30–20:40 (Q12 cycle), actor "Any". With date-based pausing the
+cranker resumes at 00:00 UTC Monday and will catch up on its first hourly run, roughly
+twelve hours earlier than the plan's script. The end state is identical; only the timestamps
+differ. If the watchtower needs the scripted times, disable the workflow in the Actions tab
+instead and re-enable it Monday around 13:00.
+
+Full procedure is in [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ## Reverts you should expect
 
