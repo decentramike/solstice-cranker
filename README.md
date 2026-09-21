@@ -124,6 +124,46 @@ npm run crank:dry    # decide only
 npm run crank        # decide and send
 ```
 
+## Two crankers
+
+There are two entrypoints. They send the same two calls and you can run either, or both.
+
+| | `npm run crank` | `npm run crank:simple` |
+| :-- | :-- | :-- |
+| Decides what is due by | reading chain state | arithmetic on the clock |
+| Contract reads per run | ~6 | **0** |
+| Gas when nothing is due | none — it simulates first | one reverted transaction |
+| Detects a permanently lost quarter | yes | no |
+| Notices a wrong `postPeriod` | yes, alerts on it | no — sends at the wrong time |
+| Can be stopped by an unreadable RPC | harder than it was, but yes | no |
+
+**`crank` is the default.** It knows what it is doing: it reads `lastSubmittedQuarter`, the
+gate pointer, and the chain's own view of the latest bound quarter, so it sends only what is
+actually due, spends nothing when nothing is due, and can tell you a quarter has been lost.
+
+**`crank:simple` is the fallback.** It reads nothing at all. The schedule is
+`genesisUnix + (activationEpoch + Q × epochsPerQuarter + postPeriod + verificationWindow) × 30`,
+which is four numbers already in `config/networks.json` and a clock. When that time arrives it
+sends both calls and reports whatever comes back. A revert is the expected answer when a call
+was not due, and is not treated as a failure.
+
+Use it when the read path is the problem — a rate-limited RPC, a node serving stale or
+malformed responses — because a cranker that never asks a question cannot be stopped by a bad
+answer. The cost is gas on reverts and a loss of every diagnostic that needs chain state.
+
+To switch, change one line in `.github/workflows/solstice-crank.yml`:
+
+```yaml
+- run: node scripts/crank-simple.mjs   # was: node scripts/crank.mjs
+```
+
+Both honour `CRANK_PAUSED` and `CRANK_DISABLED_DAYS`. Pausing is an operator decision, not a
+condition to be clever about, and the rehearsal's no-crank weekends depend on it.
+
+`CRANK_SIMPLE_WINDOW_HOURS` (default 6) is how long after a quarter binds the simple cranker
+keeps trying. Wider than one hour on purpose: the cron fires hourly, so a single missed run
+would otherwise lose the quarter. Repeat sends inside the window just revert.
+
 ## Pausing for the rehearsal weekend
 
 Phase 1 is a calibnet rehearsal, activation Wednesday 23 September 2026 13:00 UTC through

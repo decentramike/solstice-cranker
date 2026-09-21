@@ -21,7 +21,8 @@
     "rehearsal": "node devnet/rehearsal.mjs",
     "demo": "node devnet/demo.mjs",
     "test": "node --test --test-concurrency=1 test/*.test.mjs",
-    "test:integration": "node --test test/integration/*.test.mjs"
+    "test:integration": "node --test test/integration/*.test.mjs",
+    "crank:simple": "node scripts/crank-simple.mjs"
   },
   "dependencies": {
     "ethers": "^6.13.4"

@@ -10,13 +10,16 @@
     "  verificationWindow CONFIG ONLY -- same, VERIFICATION_WINDOW is `private immutable`",
     "",
     "So only postPeriod and verificationWindow can drift silently. The cranker cross-checks the",
-    "schedule they produce against aggregatedFilecoinPayVolume() on every run and alerts on divergence."
+    "schedule they produce against aggregatedFilecoinPayVolume() on every run and alerts on divergence.",
+    "",
+    "genesisUnix is the chain's genesis timestamp, so any epoch's wall-clock time is genesisUnix + epoch * epochSeconds. scripts/crank-simple.mjs uses it to schedule entirely from the clock, with no chain reads at all. Verified against two blocks 1000 epochs apart on each network. null on the devnet, whose epochs are not wall-clock."
   ],
   "devnet": {
     "chainId": 3141592,
     "label": "Local devnet",
     "rpcUrl": "http://127.0.0.1:8545",
     "epochSeconds": 30,
+    "genesisUnix": null,
     "sra": "0x0000000000000000000000000000000000000000",
     "swa": "0x0000000000000000000000000000000000000000",
     "activationEpoch": 0,
@@ -33,6 +36,7 @@
     "label": "Filecoin Calibration",
     "rpcUrl": "https://api.calibration.node.glif.io/rpc/v1",
     "epochSeconds": 30,
+    "genesisUnix": 1667326380,
     "sra": "0xeDfCd0947F7E9d58E0035f032520d75ce8eCA451",
     "swa": "0xDE4fBd083F18f96C241DdE0A83C3EDC422Be9BA6",
     "activationEpoch": 4094734,
@@ -49,6 +53,7 @@
     "label": "Filecoin Mainnet",
     "rpcUrl": "https://api.node.glif.io/rpc/v1",
     "epochSeconds": 30,
+    "genesisUnix": 1598306400,
     "sra": "0xeDfCd0947F7E9d58E0035f032520d75ce8eCA451",
     "swa": "0xDE4fBd083F18f96C241DdE0A83C3EDC422Be9BA6",
     "activationEpoch": 6450120,
