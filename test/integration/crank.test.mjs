@@ -112,6 +112,46 @@ describe('cranker against the local devnet', { skip }, () => {
     return config;
   }
 
+  /**
+   * A JSON-RPC proxy in front of the devnet that answers ONE method with a malformed
+   * result, then forwards everything else untouched.
+   *
+   * This is the shape that matters: not a transport failure (which retries) and not a
+   * decodable revert (which classifies), but an answer the client cannot make sense of.
+   * That is what used to escape isQuarterBound and abort the whole run.
+   */
+  async function breakMethodOnce(upstream, method) {
+    const { createServer } = await import('node:http');
+    let broken = false;
+    const server = createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', async () => {
+        const payload = JSON.parse(body);
+        if (payload.method === method && !broken) {
+          broken = true;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: payload.id, result: '0xnonsense' }));
+          return;
+        }
+        const upstreamRes = await fetch(upstream, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body,
+        });
+        const text = await upstreamRes.text();
+        res.writeHead(upstreamRes.status, { 'content-type': 'application/json' });
+        res.end(text);
+      });
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const { port } = server.address();
+    return {
+      url: `http://127.0.0.1:${port}`,
+      close: () => new Promise((r) => server.close(r)),
+    };
+  }
+
   const actionsFor = (record, call) => record.actions.filter((a) => a.call === call);
   const bindingOf = (q) => F.bindingEpochOf(q, DEPLOYMENT);
 
@@ -441,6 +481,53 @@ describe('cranker against the local devnet', { skip }, () => {
       const sent = actionsFor(record, 'quarterlyGateCheck').filter((a) => a.decision === 'sent');
       assert.equal(sent.length, 2);
       assert.equal((await F.readSwaGateState()).lastCheckedQuarter, from + 1);
+    });
+  });
+
+  describe('submitShares survives everything optional failing', () => {
+    // submitShares(Q) is the only call here with a hard deadline, and missing it destroys a
+    // quarter's share map permanently. Nothing optional may stand between the run starting
+    // and that call being attempted. Each of these used to abort the run outright.
+
+    it('lands even when the SWA is not there at all', async () => {
+      const q = await nextUntouchedQuarter();
+      await F.postVolume(q, '4200');
+      await F.mineTo(bindingOf(q));
+
+      const { record, exitCode } = await runCrank(
+        makeConfig({ addresses: { sra: DEPLOYMENT.sra, swa: '0x000000000000000000000000000000000000dEaD' } })
+      );
+
+      const submit = actionsFor(record, 'submitShares')[0];
+      assert.equal(submit.decision, 'sent', 'the deadline-critical call must still go out');
+      assert.equal((await F.readSraQuarterState()).lastSubmittedQuarter, q);
+
+      const gate = actionsFor(record, 'quarterlyGateCheck')[0];
+      assert.equal(gate.decision, 'skipped', 'the gate has no deadline; skipping it is correct');
+      assert.equal(exitCode, 0, 'an unreadable gate is a warning, not a failed run');
+    });
+
+    it('lands even when the chain cross-check cannot answer', async () => {
+      const q = await nextUntouchedQuarter();
+      await F.postVolume(q, '4200');
+      await F.mineTo(bindingOf(q));
+
+      // aggregatedFilecoinPayVolume is the cross-check probe. Break it in a way that is
+      // neither a transport failure nor a decodable NotBound -- the shape that, before
+      // this was tolerated, propagated out and aborted the run.
+      const config = makeConfig();
+      const original = config.rpcUrl;
+      const stub = await breakMethodOnce(original, 'eth_call');
+      try {
+        const { record } = await runCrank({ ...config, rpcUrl: stub.url });
+        const submit = actionsFor(record, 'submitShares')[0];
+        assert.ok(
+          ['sent', 'skipped'].includes(submit.decision),
+          `submitShares must still be attempted, got ${submit.decision}`
+        );
+      } finally {
+        await stub.close();
+      }
     });
   });
 

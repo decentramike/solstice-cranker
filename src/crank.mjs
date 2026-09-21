@@ -202,26 +202,54 @@ export async function runCrank(config) {
   const { provider, wallet, sra, swa, address } = await connect(config);
   const ctx = { provider, config };
 
-  const [sraHasCode, swaHasCode] = await Promise.all([
-    hasCode(provider, config.addresses.sra),
-    hasCode(provider, config.addresses.swa),
-  ]);
-  if (!sraHasCode || !swaHasCode) {
+  // Everything from here to the submitShares attempt is best-effort.
+  //
+  // submitShares(Q) is the only call in this system with a hard deadline, and missing it
+  // destroys a quarter's share map for good. Nothing optional may stand between the run
+  // starting and that call being attempted: not a flaky RPC on a cross-check, not an
+  // unreadable SWA, not a balance lookup. `tolerate` degrades each of those to a warning
+  // and carries on. The SRA itself is the only hard requirement -- without it there is
+  // nothing to submit to.
+  const degraded = [];
+  const tolerate = async (what, fn, fallback) => {
+    try {
+      return await fn();
+    } catch (err) {
+      const message = err?.shortMessage ?? err?.message ?? String(err);
+      log.warn(`${what} failed; continuing without it`, { error: message });
+      degraded.push({ what, error: message });
+      return fallback;
+    }
+  };
+
+  const sraHasCode = await hasCode(provider, config.addresses.sra);
+  if (!sraHasCode) {
     throw new Error(
-      `no contract code at ${!sraHasCode ? `SRA ${config.addresses.sra}` : `SWA ${config.addresses.swa}`}. ` +
-        'The address is wrong, or points at a different chain. Run `npm run sync:deployments`.'
+      `no contract code at SRA ${config.addresses.sra}. The address is wrong, or points at ` +
+        'a different chain. Run `npm run sync:deployments`.'
     );
   }
+  const swaHasCode = await tolerate('SWA code check', () => hasCode(provider, config.addresses.swa), false);
 
   const epoch = await currentEpoch(provider);
-  const balance = await readBalance(provider, address);
+  const balance = await tolerate(
+    'wallet balance read',
+    () => readBalance(provider, address),
+    { wei: null, fil: 'unknown' }
+  );
 
   log.info('connected', {
     network: config.networkName, epoch: String(epoch), cranker: address, balance: `${balance.fil} FIL`,
   });
 
   // ---- geometry: chain first, config for what the chain will not say --------
-  const chainGeometry = await readChainGeometry(sra);
+  // If the chain will not answer, config still describes the geometry well enough to
+  // resolve a due quarter, and the pre-send simulation is the real guard against sending
+  // the wrong thing. Falling back beats not cranking.
+  const chainGeometry = await tolerate('chain geometry read', () => readChainGeometry(sra), {
+    activationEpoch: config.quarters.activationEpoch,
+    epochsPerQuarter: config.quarters.epochsPerQuarter,
+  });
   const geometry = {
     activationEpoch: chainGeometry.activationEpoch,
     epochsPerQuarter: chainGeometry.epochsPerQuarter,
@@ -250,15 +278,18 @@ export async function runCrank(config) {
   }
 
   // ---- contract progress ---------------------------------------------------
-  const [sraState, gateState] = await Promise.all([
-    readSraQuarterState(provider, config.addresses.sra),
-    readSwaGateState(provider, config.addresses.swa),
-  ]);
+  // The SRA's progress counter is required -- it is what says whether this quarter's map is
+  // already installed. The SWA's is not: a gate we cannot read is a gate we skip, and the
+  // gate has no deadline.
+  const sraState = await readSraQuarterState(provider, config.addresses.sra);
+  const gateState = swaHasCode
+    ? await tolerate('SWA gate state read', () => readSwaGateState(provider, config.addresses.swa), null)
+    : null;
 
   const schedule = buildSchedule(geometry, epoch, {
     lastSubmittedQuarter: sraState.lastSubmittedQuarter,
-    lastCheckedQuarter: gateState.lastCheckedQuarter,
-    gateComplete: gateState.complete,
+    lastCheckedQuarter: gateState?.lastCheckedQuarter ?? null,
+    gateComplete: gateState?.complete ?? false,
   });
 
   log.info('schedule', {
@@ -267,12 +298,22 @@ export async function runCrank(config) {
     nextPhaseIn: epochsToDuration(schedule.epochsUntilNextPhase, config.epochSeconds),
     latestBound: schedule.dueQuarter ?? 'none',
     lastSubmitted: sraState.lastSubmittedQuarter,
-    gate: `${gateState.steps}/${gateState.gateSteps} steps, last checked Q${gateState.lastCheckedQuarter}`,
+    gate: gateState ? `${gateState.steps}/${gateState.gateSteps} steps, last checked Q${gateState.lastCheckedQuarter}` : 'unreadable',
   });
 
   // ---- cross-check the computed schedule against the chain ------------------
-  const observed = await observeLatestBoundQuarter(sra, schedule.dueQuarter);
-  const comparison = compareWithChain(schedule.dueQuarter, observed.quarter);
+  // A cross-check that cannot run is not a reason to skip the crank. The deterministic
+  // schedule already names the due quarter, and the pre-send simulation still refuses to
+  // broadcast anything the contract would reject -- so falling back here costs a warning,
+  // not correctness.
+  const observed = await tolerate(
+    'chain cross-check of the due quarter',
+    () => observeLatestBoundQuarter(sra, schedule.dueQuarter),
+    { quarter: schedule.dueQuarter, probes: 0, unchecked: true }
+  );
+  const comparison = observed.unchecked
+    ? { agrees: true, divergence: null }
+    : compareWithChain(schedule.dueQuarter, observed.quarter);
   if (!comparison.agrees) {
     log.warn('computed schedule disagrees with the chain', { message: comparison.message });
     alerts.raise({
@@ -488,9 +529,17 @@ export async function runCrank(config) {
   // stops on the first non-send, which covers NotBound, StepsComplete and the SWA hold.
   if (pause.paused) {
     actions.push({
-      call: 'quarterlyGateCheck', quarter: gateState.lastCheckedQuarter + 1, decision: 'skipped',
+      call: 'quarterlyGateCheck', quarter: gateState ? gateState.lastCheckedQuarter + 1 : null, decision: 'skipped',
       outcome: 'not-due', reason: null, txHash: null, gasUsed: null, severity: 'info',
       message: `paused: ${pause.reason}`,
+    });
+  } else if (!gateState) {
+    // The gate has no deadline, so skipping it for one run costs an hour, not a quarter.
+    log.warn('quarterlyGateCheck: the SWA gate state could not be read; skipping the gate this run');
+    actions.push({
+      call: 'quarterlyGateCheck', quarter: null, decision: 'skipped', outcome: 'not-due',
+      reason: null, txHash: null, gasUsed: null, severity: 'warn',
+      message: 'SWA gate state unreadable this run; the gate has no deadline and the next run retries',
     });
   } else if (gateState.complete) {
     log.info('quarterlyGateCheck: gate has taken all 8 steps and is closed for good');
@@ -501,7 +550,8 @@ export async function runCrank(config) {
     });
   } else {
     let target = gateState.lastCheckedQuarter + 1;
-    for (let i = 0; i < config.maxGateCatchup; i++) {
+    try {
+      for (let i = 0; i < config.maxGateCatchup; i++) {
       const action = await attempt({
         contract: swa, method: 'quarterlyGateCheck', args: [],
         call: 'quarterlyGateCheck', quarter: target, config, ctx,
@@ -525,6 +575,14 @@ export async function runCrank(config) {
       // nothing moved, and looping would re-simulate the same quarter forever.
       if (action.decision !== 'sent') break;
       target += 1;
+      }
+    } catch (err) {
+      // submitShares has already been attempted by this point. The gate is the call with no
+      // deadline, so a transport failure here is a warning and a retry next hour -- never a
+      // reason to lose the run record or the alerts gathered above.
+      const message = err?.shortMessage ?? err?.message ?? String(err);
+      log.warn('gate catch-up stopped early', { error: message });
+      degraded.push({ what: 'quarterlyGateCheck catch-up', error: message });
     }
     if (actions.filter((a) => a.call === 'quarterlyGateCheck' && a.decision === 'sent').length >= config.maxGateCatchup) {
       log.warn('hit the gate catch-up cap for this run; the next scheduled run continues', {
@@ -534,8 +592,12 @@ export async function runCrank(config) {
   }
 
   // ---- balance --------------------------------------------------------------
-  const balanceAfter = await readBalance(provider, address);
-  if (balanceAfter.wei < config.minBalanceWei) {
+  const balanceAfter = await tolerate(
+    'post-run wallet balance read',
+    () => readBalance(provider, address),
+    balance
+  );
+  if (balanceAfter.wei !== null && balanceAfter.wei < config.minBalanceWei) {
     alerts.raise({
       severity: 'warn',
       title: 'Solstice: cranker wallet is low on gas',
@@ -545,6 +607,20 @@ export async function runCrank(config) {
       context: { epoch: String(epoch), cranker: address, balanceFil: balanceAfter.fil },
     });
     log.warn('wallet below threshold', { balance: balanceAfter.fil, threshold: config.minBalanceFil });
+  }
+
+  // ---- what we had to do without ---------------------------------------------
+  if (degraded.length) {
+    alerts.raise({
+      severity: 'warn',
+      title: `Cranker ran degraded: ${degraded.length} read(s) failed`,
+      body:
+        'The crank went ahead anyway, which is the intended behaviour -- submitShares has a ' +
+        'hard deadline and nothing optional is allowed to block it. But these reads failed ' +
+        'and are worth looking at:\n\n' +
+        degraded.map((d) => `  - ${d.what}: ${d.error}`).join('\n'),
+      context: { epoch: String(epoch), cranker: address, balanceFil: balanceAfter.fil },
+    });
   }
 
   // ---- result ---------------------------------------------------------------
@@ -566,6 +642,7 @@ export async function runCrank(config) {
     submitDeadlineEpoch: window.expiresAtEpoch === null ? null : Number(window.expiresAtEpoch),
     missedQuarters,
     forcedTargetQuarter: config.targetQuarter,
+    degraded: degraded.map((d) => d.what),
     gateDueQuarter: schedule.gate.quarter,
     gateDueAtEpoch: schedule.gate.dueAtEpoch === null ? null : Number(schedule.gate.dueAtEpoch),
     chainAgreesWithConfig: comparison.agrees,
