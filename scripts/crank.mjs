@@ -38,7 +38,10 @@ function summarise(record) {
 async function main() {
   let config;
   try {
-    config = loadConfig();
+    // A dry run broadcasts nothing, so it does not need a signing key. That lets the whole
+    // decision path be exercised against a live deployment before the key is anywhere near
+    // CI -- which is the order you want to do it in.
+    config = loadConfig(process.env, { requireKey: !process.env.CRANK_DRY_RUN });
   } catch (err) {
     log.error(err.message);
     process.exitCode = 1;

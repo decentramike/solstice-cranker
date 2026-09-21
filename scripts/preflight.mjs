@@ -23,9 +23,13 @@ const record = (name, ok, detail, fatal = true) => {
 };
 
 async function main() {
+  // Preflight sends nothing, so it does not need a signing key. Running it keyless means
+  // connectivity, the ABI and the schedule can all be checked by someone who is not holding
+  // the wallet -- and checked before the key is ever loaded into CI. The one check that
+  // needs a wallet is the balance, and that needs only the address: set CRANKER_ADDRESS.
   let config;
   try {
-    config = loadConfig();
+    config = loadConfig(process.env, { requireKey: false });
   } catch (err) {
     process.stdout.write(`  [FAIL] configuration\n         ${err.message}\n`);
     process.exitCode = 1;
@@ -41,11 +45,20 @@ async function main() {
   process.stdout.write('\nChecks\n');
 
   record('NETWORK is known', true, `${config.networkName} (chain ${config.chainId})`);
-  record(
-    'CRANKER_PRIVATE_KEY is well-formed',
-    true,
-    'present and correctly shaped (the value is never printed)'
-  );
+  if (config.privateKey) {
+    record(
+      'CRANKER_PRIVATE_KEY is well-formed',
+      true,
+      'present and correctly shaped (the value is never printed)'
+    );
+  } else {
+    record(
+      'CRANKER_PRIVATE_KEY is well-formed',
+      true,
+      'not set -- running keyless. Everything but the balance check still applies.',
+      false
+    );
+  }
 
   if (config.addresses.sra === ZERO_ADDRESS || config.addresses.swa === ZERO_ADDRESS) {
     record(
@@ -69,7 +82,9 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  const { provider, sra, swa, address } = connection;
+  const { provider, sra, swa } = connection;
+  // Without a key there is no signer to ask, so fall back to an explicitly supplied address.
+  const address = connection.address ?? process.env.CRANKER_ADDRESS ?? null;
   record('RPC reachable and on the expected chain', true, `chain ${config.chainId}`);
 
   const epoch = await currentEpoch(provider);
@@ -120,15 +135,24 @@ async function main() {
     );
   }
 
-  const balance = await readBalance(provider, address);
-  const funded = balance.wei >= config.minBalanceWei;
-  record(
-    'cranker wallet funded',
-    funded,
-    `${address} holds ${balance.fil} FIL (threshold ${config.minBalanceFil})` +
-      (funded ? '' : ' -- see docs/WALLET.md'),
-    false
-  );
+  if (address) {
+    const balance = await readBalance(provider, address);
+    const funded = balance.wei >= config.minBalanceWei;
+    record(
+      'cranker wallet funded',
+      funded,
+      `${address} holds ${balance.fil} FIL (threshold ${config.minBalanceFil})` +
+        (funded ? '' : ' -- see docs/WALLET.md'),
+      false
+    );
+  } else {
+    record(
+      'cranker wallet funded',
+      true,
+      'skipped: no key and no CRANKER_ADDRESS, so there is no wallet to check',
+      false
+    );
+  }
 
   const [sraState, gateState] = await Promise.all([
     readSraQuarterState(provider, config.addresses.sra),

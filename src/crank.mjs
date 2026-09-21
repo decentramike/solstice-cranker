@@ -232,11 +232,9 @@ export async function runCrank(config) {
   const swaHasCode = await tolerate('SWA code check', () => hasCode(provider, config.addresses.swa), false);
 
   const epoch = await currentEpoch(provider);
-  const balance = await tolerate(
-    'wallet balance read',
-    () => readBalance(provider, address),
-    { wei: null, fil: 'unknown' }
-  );
+  const balance = address
+    ? await tolerate('wallet balance read', () => readBalance(provider, address), { wei: null, fil: 'unknown' })
+    : { wei: null, fil: 'n/a (no signer)' };
 
   log.info('connected', {
     network: config.networkName, epoch: String(epoch), cranker: address, balance: `${balance.fil} FIL`,
@@ -592,11 +590,9 @@ export async function runCrank(config) {
   }
 
   // ---- balance --------------------------------------------------------------
-  const balanceAfter = await tolerate(
-    'post-run wallet balance read',
-    () => readBalance(provider, address),
-    balance
-  );
+  const balanceAfter = address
+    ? await tolerate('post-run wallet balance read', () => readBalance(provider, address), balance)
+    : balance;
   if (balanceAfter.wei !== null && balanceAfter.wei < config.minBalanceWei) {
     alerts.raise({
       severity: 'warn',
