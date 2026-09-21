@@ -57,7 +57,8 @@ function utcWeekday(date) {
  * test what happens when nobody cranks. A paused run still reads chain state and reports,
  * so the logs stay continuous -- it just sends nothing.
  */
-export function resolvePause(now = new Date(), env = process.env) {
+export function resolvePause(now = new Date(), rawEnv = process.env) {
+  const env = withoutBlanks(rawEnv);
   if (truthy(env.CRANK_PAUSED)) {
     return { paused: true, reason: 'CRANK_PAUSED is set' };
   }
@@ -80,6 +81,26 @@ export function resolvePause(now = new Date(), env = process.env) {
 }
 
 /**
+ * Treats an empty string as "not set".
+ *
+ * GitHub Actions substitutes an undefined repository variable as the EMPTY STRING, not as
+ * an absent key -- so `${{ vars.CRANK_MIN_BALANCE_FIL }}` on a repo that never defined it
+ * arrives as `CRANK_MIN_BALANCE_FIL=""`. `??` does not fall back on that, and every
+ * optional setting in this file would then take '' as a deliberate value: parseEther('')
+ * throws, Number('') is 0, and an unset NETWORK becomes an unknown network.
+ *
+ * Nothing here has a meaningful empty-string value, so normalising once at the boundary is
+ * both correct and the only place this has to be remembered.
+ */
+function withoutBlanks(env) {
+  const out = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (v !== '') out[k] = v;
+  }
+  return out;
+}
+
+/**
  * @param {object} env
  * @param {{requireKey?: boolean}} options
  *   `requireKey: false` loads a read-only configuration with no signer. The watchdog uses
@@ -87,7 +108,8 @@ export function resolvePause(now = new Date(), env = process.env) {
  *   Handing a wallet key to the most privileged job in the repo to do work that needs no
  *   wallet is exactly the trade not to make.
  */
-export function loadConfig(env = process.env, { requireKey = true } = {}) {
+export function loadConfig(rawEnv = process.env, { requireKey = true } = {}) {
+  const env = withoutBlanks(rawEnv);
   const name = env.NETWORK ?? 'calibnet';
   const network = NETWORKS[name];
   if (!network) {

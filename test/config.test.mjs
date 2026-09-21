@@ -367,6 +367,55 @@ describe('loadConfig', () => {
   });
 });
 
+describe('an unset GitHub Actions variable arrives as the empty string', () => {
+  // This is not hypothetical. `${{ vars.FOO }}` on a repo that never defined FOO is
+  // substituted as FOO="" -- not as an absent key -- so every optional setting used to take
+  // '' as a deliberate value. It broke the very first scheduled run on calibnet:
+  //   error CRANK_MIN_BALANCE_FIL is not a number:
+  // Local tests never caught it because they either set a variable or deleted it, and never
+  // set it to blank. This reproduces the real workflow environment.
+  const CI_BLANKS = {
+    SRA_ADDRESS: '', SWA_ADDRESS: '', CRANK_PAUSED: '', CRANK_DISABLED_DAYS: '',
+    CRANK_DISABLED_WEEKDAYS: '', CRANK_MAX_GATE_CATCHUP: '', CRANK_MIN_BALANCE_FIL: '',
+    CRANK_CONFIRMATIONS: '', CRANK_LOG_LEVEL: '', CRANK_TARGET_QUARTER: '',
+    ALERT_TRANSPORT: '', ALERT_EMAIL_TO: '', ALERT_EMAIL_FROM: '',
+    SENDGRID_API_KEY: '', RESEND_API_KEY: '', ALERT_WEBHOOK_URL: '', CRANK_STATE_DIR: '',
+  };
+
+  it('loads with every optional variable blank, exactly as the workflow passes them', () => {
+    const config = loadConfig({ NETWORK: 'calibnet', CRANKER_PRIVATE_KEY: PLACEHOLDER_KEY, ...CI_BLANKS });
+
+    assert.equal(config.networkName, 'calibnet');
+    assert.equal(config.minBalanceFil, '0.1', 'blank must fall back to the network default');
+    assert.equal(config.maxGateCatchup, 8);
+    assert.equal(config.confirmations, 1);
+    assert.equal(config.targetQuarter, null, 'blank must not become a forced target');
+    assert.equal(config.stateDir, null);
+    assert.equal(config.alerts.to, null);
+    assert.deepEqual(config.alerts.transports, ['console']);
+    // Blank addresses must fall through to the committed, deployed ones.
+    assert.notEqual(config.addresses.sra, '0x0000000000000000000000000000000000000000');
+    assert.equal(config.deployed, true);
+  });
+
+  it('a blank RPC_URL falls back to the network default rather than an empty URL', () => {
+    const config = loadConfig({ NETWORK: 'calibnet', CRANKER_PRIVATE_KEY: PLACEHOLDER_KEY, RPC_URL: '' });
+    assert.match(config.rpcUrl, /^https:\/\//);
+  });
+
+  it('a blank NETWORK is the default network, not an unknown one', () => {
+    const config = loadConfig({ NETWORK: '', CRANKER_PRIVATE_KEY: PLACEHOLDER_KEY });
+    assert.equal(config.networkName, 'calibnet');
+  });
+
+  it('blank pause variables do not pause', () => {
+    const r = resolvePause(new Date('2026-09-24T19:00:00Z'), {
+      CRANK_PAUSED: '', CRANK_DISABLED_DAYS: '', CRANK_DISABLED_WEEKDAYS: '',
+    });
+    assert.equal(r.paused, false);
+  });
+});
+
 describe('describeConfig never leaks a secret', () => {
   const SECRET_PATH_SEGMENT = 'sk-live-abcdef0123456789';
   const SECRET_QUERY_VALUE = 'qk-live-9876543210fedcba';

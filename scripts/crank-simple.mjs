@@ -88,7 +88,9 @@ async function main() {
     );
   }
 
-  const windowHours = Number(process.env.CRANK_SIMPLE_WINDOW_HOURS ?? DEFAULT_WINDOW_HOURS);
+  // `|| DEFAULT`, not `?? DEFAULT`: an undefined GitHub Actions variable arrives as the
+  // empty string, and Number('') is 0, which would fail the check below on every run.
+  const windowHours = Number(process.env.CRANK_SIMPLE_WINDOW_HOURS || DEFAULT_WINDOW_HOURS);
   if (!Number.isFinite(windowHours) || windowHours <= 0) {
     throw new Error(`CRANK_SIMPLE_WINDOW_HOURS must be a positive number, got ${windowHours}`);
   }
