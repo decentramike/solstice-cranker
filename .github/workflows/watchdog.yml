@@ -1,0 +1,162 @@
+# Independent second check that the cranks are actually landing.
+#
+# The crank workflow can fail in ways that produce no signal: GitHub skips or delays a
+# scheduled run, the RPC endpoint is down for hours, the wallet is empty, or the
+# workflow itself got disabled for inactivity. None of those show up as a red run you
+# would notice in time. This workflow watches the chain instead of watching the job.
+#
+# scripts/watchdog.mjs exits 0 when the expected SharesSubmitted / QuarterlyGateCheckResult
+# for the due quarter is on chain, and 1 when a crank is overdue.
+#
+# It deliberately does NOT get CRANKER_PRIVATE_KEY. A watchdog that can send transactions
+# is not an independent check, and this job writes to the issue tracker, which is a
+# larger blast radius than the crank job has. It only reads chain state.
+
+name: Crank watchdog
+
+on:
+  schedule:
+    # Every 6 hours, offset from the crank's :23 so a transient RPC outage does not
+    # take out both at the same minute.
+    - cron: '47 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: crank-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    name: Watchdog
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      ISSUE_LABEL: cranker-watchdog
+      ISSUE_TITLE: 'Watchdog: a Solstice crank is overdue'
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      NETWORK: ${{ vars.NETWORK }}
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install runtime dependencies only
+        run: npm ci --omit=dev
+
+      - name: Check whether a crank is overdue
+        id: check
+        continue-on-error: true
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+          SRA_ADDRESS: ${{ vars.SRA_ADDRESS }}
+          SWA_ADDRESS: ${{ vars.SWA_ADDRESS }}
+          CRANK_PAUSED: ${{ vars.CRANK_PAUSED }}
+          CRANK_DISABLED_DAYS: ${{ vars.CRANK_DISABLED_DAYS }}
+          CRANK_DISABLED_WEEKDAYS: ${{ vars.CRANK_DISABLED_WEEKDAYS }}
+          ALERT_TRANSPORT: ${{ vars.ALERT_TRANSPORT }}
+          ALERT_EMAIL_TO: ${{ vars.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_FROM: ${{ vars.ALERT_EMAIL_FROM }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+          WATCHDOG_GRACE_EPOCHS: ${{ vars.WATCHDOG_GRACE_EPOCHS }}
+          CRANK_CONFIRMATIONS: ${{ vars.CRANK_CONFIRMATIONS }}
+          CRANK_LOG_LEVEL: ${{ vars.CRANK_LOG_LEVEL }}
+        shell: bash
+        run: |
+          set -o pipefail
+
+          # No CRANKER_PRIVATE_KEY is set here, deliberately and by design.
+          # scripts/watchdog.mjs loads its config with { requireKey: false } and connect()
+          # returns a provider-only session, so the contracts are attached to a runner that
+          # cannot sign. This job can write to the issue tracker; giving it the ability to
+          # broadcast as well would make it neither independent nor least-privilege.
+          node scripts/watchdog.mjs 2>&1 | tee "$RUNNER_TEMP/watchdog.log"
+
+      - name: Open or update the overdue issue
+        if: steps.check.outcome == 'failure'
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "The watchdog reports that a Solstice crank has not landed on chain."
+            echo
+            echo "- Network: \`${NETWORK:-unset}\`"
+            echo "- Detected: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "- Run: ${RUN_URL}"
+            echo
+            echo "Watchdog output:"
+            echo
+            echo '```'
+            tail -c 50000 "$RUNNER_TEMP/watchdog.log" || echo '(no output captured)'
+            echo '```'
+            echo
+            echo "What to do: \`docs/RUNBOOK.md\` -> \"What each alert means\"."
+            echo
+            echo "If the output names \`NotLatestQuarter\`, the submission window for that"
+            echo "quarter has closed and its share map cannot be recovered. Escalate and"
+            echo "document it. Do not retry."
+            echo
+            echo "cc @decentramike"
+          } > "$RUNNER_TEMP/body.md"
+
+          existing=$(gh issue list \
+            --state open --label "$ISSUE_LABEL" --limit 1 \
+            --json number --jq '.[0].number // empty')
+
+          if [ -n "$existing" ]; then
+            echo "Updating existing issue #${existing}"
+            gh issue comment "$existing" --body-file "$RUNNER_TEMP/body.md"
+          else
+            # The label may not exist yet on a fresh repo. Creating it is idempotent enough.
+            gh label create "$ISSUE_LABEL" \
+              --color B60205 \
+              --description 'Opened automatically when a Solstice crank is overdue' \
+              >/dev/null 2>&1 || true
+            gh issue create \
+              --title "$ISSUE_TITLE" \
+              --label "$ISSUE_LABEL" \
+              --body-file "$RUNNER_TEMP/body.md"
+          fi
+
+      - name: Close the overdue issue on recovery
+        if: steps.check.outcome == 'success'
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list \
+            --state open --label "$ISSUE_LABEL" --limit 1 \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" \
+              --body "Watchdog is green again as of $(date -u +%Y-%m-%dT%H:%M:%SZ). Closing. Run: ${RUN_URL}"
+            gh issue close "$existing"
+          else
+            echo "Healthy, and no open watchdog issue to close."
+          fi
+
+      - name: Fail the run so the Actions tab agrees with the issue tracker
+        # The issue is the alert that reaches a person. This step exists so the workflow
+        # badge and the Actions tab do not show green while a crank is overdue.
+        if: steps.check.outcome == 'failure'
+        run: |
+          echo '::error::A Solstice crank is overdue. See the open cranker-watchdog issue.'
+          exit 1

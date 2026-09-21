@@ -1,0 +1,117 @@
+# Sends the two permissionless Solstice cranks when chain state says one is due:
+#   submitShares(Q)       on the Service Rewards Actor
+#   quarterlyGateCheck()  on the Stream Weight Actor
+#
+# Why hourly and not daily. submitShares(Q) has a hard deadline: it must land before
+# quarter Q+1 binds. After that it reverts NotLatestQuarter and quarter Q's share map
+# is never installed -- that data is gone permanently, and RemoveOrchestrator stays
+# blocked until it lands. Hourly gives ~24 attempts per day, and the script is
+# idempotent: a run with nothing due reads state, reports, broadcasts nothing, exits 0.
+#
+# This job holds a private key. It gets `contents: read` and nothing else. Do not add
+# permissions here. If a step needs to write something, put it in another workflow.
+#
+# Source: https://github.com/filecoin-project/solstice/issues/68
+# Operations: docs/RUNBOOK.md
+
+name: Solstice crank
+
+on:
+  schedule:
+    # :23 past the hour. GitHub's scheduler is heavily oversubscribed on the hour and
+    # delays those runs the most. Scheduled runs are best-effort regardless -- the
+    # watchdog workflow is the backstop, not this cron.
+    - cron: '23 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: read chain state, decide, report, broadcast nothing.'
+        type: boolean
+        required: false
+        default: false
+      network:
+        description: 'Override NETWORK for this run. Blank uses the NETWORK repository variable.'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  # One crank at a time, repo-wide, across both the schedule and manual runs.
+  # Never cancel a run in flight: it may already have broadcast a transaction, and a
+  # cancelled run cannot tell you whether that transaction landed.
+  group: solstice-crank
+  cancel-in-progress: false
+
+jobs:
+  crank:
+    name: Crank
+    runs-on: ubuntu-latest
+    # A catch-up run can send up to CRANK_MAX_GATE_CATCHUP (default 8) gate calls, each
+    # waiting on confirmations at 30s per epoch. 20 minutes covers that with room spare.
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          # Nothing here pushes. Do not leave a git credential on a runner holding a key.
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install runtime dependencies only
+        # --omit=dev keeps hardhat, the devnet and the dashboard off this runner.
+        # The cranker's only runtime dependency is ethers v6.
+        run: npm ci --omit=dev
+
+      - name: Crank
+        env:
+          # --- required ---
+          NETWORK: ${{ inputs.network || vars.NETWORK }}
+          RPC_URL: ${{ secrets.RPC_URL }}
+          CRANKER_PRIVATE_KEY: ${{ secrets.CRANKER_PRIVATE_KEY }}
+
+          # --- contract addresses; blank falls back to config/networks.json ---
+          SRA_ADDRESS: ${{ vars.SRA_ADDRESS }}
+          SWA_ADDRESS: ${{ vars.SWA_ADDRESS }}
+
+          # --- pausing; see docs/RUNBOOK.md, "Rehearsal weekend" ---
+          CRANK_PAUSED: ${{ vars.CRANK_PAUSED }}
+          CRANK_DISABLED_DAYS: ${{ vars.CRANK_DISABLED_DAYS }}
+          CRANK_DISABLED_WEEKDAYS: ${{ vars.CRANK_DISABLED_WEEKDAYS }}
+
+          # --- behaviour ---
+          CRANK_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          CRANK_MAX_GATE_CATCHUP: ${{ vars.CRANK_MAX_GATE_CATCHUP }}
+          CRANK_MIN_BALANCE_FIL: ${{ vars.CRANK_MIN_BALANCE_FIL }}
+          CRANK_CONFIRMATIONS: ${{ vars.CRANK_CONFIRMATIONS }}
+          CRANK_LOG_LEVEL: ${{ vars.CRANK_LOG_LEVEL }}
+
+          # --- alerting; all optional, console + job summary when unset ---
+          ALERT_TRANSPORT: ${{ vars.ALERT_TRANSPORT }}
+          ALERT_EMAIL_TO: ${{ vars.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_FROM: ${{ vars.ALERT_EMAIL_FROM }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: node scripts/crank.mjs
+
+      - name: Point at the runbook on failure
+        if: failure()
+        run: |
+          {
+            echo '## Crank run failed'
+            echo
+            echo 'Read the step log above for the decoded revert reason, then follow'
+            echo '`docs/RUNBOOK.md` -> "What each alert means".'
+            echo
+            echo 'If the reason is `NotLatestQuarter`, that quarter'"'"'s share map is'
+            echo 'lost and cannot be re-sent. Escalate, do not retry.'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,82 @@
+# Keeps the scheduled workflows in this repository from being switched off.
+#
+# GitHub disables `schedule:` triggers in a public repository after 60 days with no
+# repository activity. It emails the repository admins when it does, but that email is
+# easy to miss, and the failure mode is silent afterwards: the crank workflow simply
+# stops running and nothing looks broken.
+#
+# On calibnet this would rarely bite -- the rehearsal is two weeks of daily activity.
+# On mainnet it is close to certain. Quarters are ~90 days, so there are about 8 cranks
+# a year and long stretches where nobody touches the repo. 60 days of quiet is the
+# normal state between quarters, not an exception. The workflows would be disabled
+# before the next crank was even due, and the first symptom would be a missed
+# submitShares(Q) and a permanently lost share map.
+#
+# So this workflow makes a real, minimal repository touch once a week: it writes the
+# current timestamp into .github/keepalive.txt and pushes that commit. Nothing reads
+# the file. The commit is the entire point.
+#
+# Two things worth knowing:
+#   - A push made with GITHUB_TOKEN does not trigger other workflows, so this cannot
+#     loop, and it will not set off CI. `[skip ci]` in the message is belt and braces.
+#   - This is the only workflow in the repo with `contents: write`. It holds no key
+#     and touches nothing else.
+#
+# If the crank workflow does get disabled anyway, re-enable it by hand:
+# Actions -> Solstice crank -> "..." -> Enable workflow. See docs/RUNBOOK.md.
+
+name: Keepalive
+
+on:
+  schedule:
+    # Mondays, 06:11 UTC. Weekly is far inside the 60-day window with room for GitHub
+    # skipping a run or two.
+    - cron: '11 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  touch:
+    name: Touch the repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out
+        # persist-credentials stays on here, deliberately: this job pushes.
+        uses: actions/checkout@v4
+
+      - name: Write the marker and push
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          cat > .github/keepalive.txt <<EOF
+          # Keepalive marker -- written weekly by .github/workflows/keepalive.yml.
+          #
+          # GitHub disables scheduled workflows in a public repository after 60 days
+          # without repository activity. This commit is that activity. Nothing reads
+          # this file; do not build anything on it.
+          last-touched: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          run: ${RUN_URL}
+          EOF
+
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/keepalive.txt
+
+          if git diff --cached --quiet; then
+            echo 'Marker unchanged, nothing to push.'
+            exit 0
+          fi
+
+          git commit -m 'chore: keepalive touch [skip ci]'
+          git push

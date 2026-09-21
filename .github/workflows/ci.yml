@@ -1,0 +1,211 @@
+# Repository CI.
+#
+# Two jobs:
+#   test       syntax-checks every .mjs and runs the unit tests on Node 20 and 24.
+#   abi-drift  rebuilds the upstream contracts from source, regenerates abi/, and fails
+#              if the committed ABI no longer matches. That is the tripwire for an
+#              upstream contract interface change -- a renamed error, a changed
+#              signature, a new selector -- which would otherwise only surface as a
+#              failed crank on a live network.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '24']
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Syntax-check every .mjs
+        # Cheap stand-in for a linter: parses each module without executing it, so a
+        # typo in a script that only ever runs on a cron cannot reach production.
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(
+            find . -name '*.mjs' \
+              -not -path './node_modules/*' \
+              -not -path './vendor/*' \
+              -not -path './devnet/artifacts/*' \
+              -not -path './dashboard/node_modules/*' \
+              -not -path './dashboard/dist/*' \
+              -print0
+          )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No .mjs files found -- that is wrong, failing."
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            echo "checking $f"
+            node --check "$f"
+          done
+          echo "Syntax-checked ${#files[@]} module(s)."
+
+      - name: Unit tests
+        run: npm test
+
+  abi-drift:
+    name: ABI drift vs upstream contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Cache the solc compiler download
+        # Hardhat downloads solc into ~/.cache/hardhat-nodejs on Linux. It is ~20 MB and
+        # comes from a single upstream host; caching it keeps CI off that host and
+        # removes the most common flaky failure in this job.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/hardhat-nodejs
+          key: solc-${{ runner.os }}-${{ hashFiles('devnet/hardhat.config.cjs') }}
+          restore-keys: |
+            solc-${{ runner.os }}-
+
+      - name: Install (including dev dependencies)
+        # This job is the one place hardhat is allowed. The cron runner never installs it.
+        run: npm ci
+
+      - name: Compile the upstream contracts
+        # Clones filecoin-project/solstice into vendor/ and compiles it. Needs network.
+        run: npm run contracts:build
+
+      - name: Regenerate abi/
+        run: npm run abi:generate
+
+      - name: Compare regenerated abi/ against what is committed
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/abi-drift.mjs" <<'DRIFT'
+          // Compares the freshly generated abi/ tree against the committed one.
+          //
+          // A plain `git diff --exit-code abi/` cannot be used here: generate-abi.mjs
+          // stamps selectors.json with `generatedFrom.vendoredAt` (a timestamp, always
+          // new) and `generatedFrom.ref` (the upstream HEAD that prepare-contracts.mjs
+          // just cloned, which moves on every upstream commit including ones that touch
+          // no contract). Comparing those would make this job fail every single run.
+          // So: strip generatedFrom, report it, and compare the substance.
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+
+          const git = (args) => execFileSync('git', args, { encoding: 'utf8' });
+
+          const committedPaths = git(['ls-tree', '--name-only', 'HEAD', 'abi/'])
+            .split('\n').filter((p) => p.endsWith('.json'));
+          const workingPaths = git(['ls-files', '--others', '--cached', '--exclude-standard', 'abi/'])
+            .split('\n').filter((p) => p.endsWith('.json'));
+          const paths = [...new Set([...committedPaths, ...workingPaths])].sort();
+
+          const canon = (v) =>
+            Array.isArray(v) ? v.map(canon)
+            : v && typeof v === 'object'
+              ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])]))
+              : v;
+
+          let failed = false;
+          const notes = [];
+          let generatedFrom = null;
+
+          for (const p of paths) {
+            let before = null;
+            try { before = JSON.parse(git(['show', `HEAD:${p}`])); }
+            catch { notes.push(`- \`${p}\` is new: not present at HEAD.`); }
+
+            let after = null;
+            if (existsSync(p)) after = JSON.parse(readFileSync(p, 'utf8'));
+            else notes.push(`- \`${p}\` was committed but regeneration did not produce it.`);
+
+            if (after?.generatedFrom) generatedFrom = after.generatedFrom;
+            for (const o of [before, after]) if (o && o.generatedFrom) delete o.generatedFrom;
+
+            if (!before || !after) { failed = true; continue; }
+
+            const a = JSON.stringify(canon(before));
+            const b = JSON.stringify(canon(after));
+            if (a === b) { console.log(`ok   ${p}`); continue; }
+
+            failed = true;
+            console.log(`DIFF ${p}`);
+            notes.push(`- \`${p}\` changed.`);
+
+            // For selectors.json, name exactly which entries moved.
+            if (p.endsWith('selectors.json')) {
+              for (const group of ['errors', 'functions', 'events']) {
+                const oldG = before[group] ?? {}, newG = after[group] ?? {};
+                for (const k of Object.keys(oldG)) {
+                  if (!(k in newG)) notes.push(`  - removed ${group}: \`${oldG[k]}\` (${k})`);
+                  else if (oldG[k] !== newG[k]) notes.push(`  - changed ${group} ${k}: \`${oldG[k]}\` -> \`${newG[k]}\``);
+                }
+                for (const k of Object.keys(newG)) {
+                  if (!(k in oldG)) notes.push(`  - added ${group}: \`${newG[k]}\` (${k})`);
+                }
+              }
+            }
+          }
+
+          const summary = process.env.GITHUB_STEP_SUMMARY;
+          const lines = [];
+          if (failed) {
+            lines.push('## ABI drift detected', '',
+              'The regenerated ABI does not match what is committed in `abi/`. Upstream',
+              'contract interfaces have moved, or `abi/` was hand-edited.', '',
+              'To fix: run `npm run contracts:build && npm run abi:generate` locally,',
+              'review the diff carefully, and commit it in its own pull request.',
+              'A changed or removed error selector means the cranker can no longer decode',
+              'that revert, so re-check the expected-revert handling in `scripts/crank.mjs`',
+              'before merging.', '', ...notes);
+          } else {
+            lines.push('## ABI matches upstream', '', 'No interface drift.');
+          }
+          if (generatedFrom) {
+            lines.push('', `Compared against upstream \`${generatedFrom.repo ?? '?'}\` at ref \`${generatedFrom.ref ?? '?'}\`.`,
+              '', '`generatedFrom` (timestamp and upstream ref) is excluded from the comparison on purpose.');
+          }
+          const text = lines.join('\n') + '\n';
+          console.log(text);
+          if (summary) appendFileSync(summary, text);
+          process.exit(failed ? 1 : 0);
+          DRIFT
+          node "$RUNNER_TEMP/abi-drift.mjs"
