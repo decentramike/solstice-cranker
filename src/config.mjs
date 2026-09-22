@@ -121,11 +121,16 @@ export function loadConfig(rawEnv = process.env, { requireKey = true } = {}) {
 
   let privateKey = null;
   if (requireKey || env.CRANKER_PRIVATE_KEY) {
+    // Trimmed, because the key almost always arrives with trailing whitespace: the WALLET.md
+    // generator writes it with a final newline, `gh secret set NAME < file` uploads the file
+    // byte for byte, and a key pasted into the GitHub UI often picks up a stray space. A hex
+    // key has no meaningful whitespace, so stripping it is always safe -- and rejecting it
+    // would fail every scheduled run with a key that is, in every way that matters, correct.
     privateKey = requiredEnv(
       env,
       'CRANKER_PRIVATE_KEY',
       'see docs/WALLET.md -- generate it yourself and store it as a GitHub Actions secret'
-    );
+    ).trim();
     if (!/^0x[0-9a-fA-F]{64}$/.test(privateKey)) {
       // Deliberately says nothing about the value itself, not even its length.
       throw new ConfigError(

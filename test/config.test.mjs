@@ -416,6 +416,32 @@ describe('an unset GitHub Actions variable arrives as the empty string', () => {
   });
 });
 
+describe('the key survives the whitespace it actually arrives with', () => {
+  // The WALLET.md generator writes the key with a final newline, and the obvious upload --
+  // `gh secret set CRANKER_PRIVATE_KEY < ~/.solstice/cranker-calibnet.key` -- copies that
+  // file byte for byte. A strict validator therefore rejected a correct key on every run.
+  // Caught by checking the real file's length (67 bytes: 66 characters and a newline)
+  // before uploading, not after a day of red runs.
+  const KEY = PLACEHOLDER_KEY;
+
+  for (const [label, value] of [
+    ['a trailing newline', KEY + '\n'],
+    ['a trailing CRLF', KEY + '\r\n'],
+    ['a trailing space', KEY + ' '],
+    ['surrounding spaces', ' ' + KEY + ' '],
+  ]) {
+    it(`accepts a key with ${label}, and stores it trimmed`, () => {
+      const c = loadConfig({ NETWORK: 'calibnet', CRANKER_PRIVATE_KEY: value });
+      assert.equal(c.privateKey, KEY);
+    });
+  }
+
+  it('still rejects a key that is actually wrong', () => {
+    assert.throws(() => loadConfig({ NETWORK: 'calibnet', CRANKER_PRIVATE_KEY: KEY.slice(0, -2) + '\n' }));
+    assert.throws(() => loadConfig({ NETWORK: 'calibnet', CRANKER_PRIVATE_KEY: 'x' + KEY.slice(1) }));
+  });
+});
+
 describe('describeConfig never leaks a secret', () => {
   const SECRET_PATH_SEGMENT = 'sk-live-abcdef0123456789';
   const SECRET_QUERY_VALUE = 'qk-live-9876543210fedcba';
