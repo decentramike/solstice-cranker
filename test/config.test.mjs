@@ -225,7 +225,10 @@ describe('CRANKER_PRIVATE_KEY validation', () => {
     ['one char short', '0x' + 'ab'.repeat(31) + 'c'],
     ['one char long', '0x' + 'ab'.repeat(32) + 'c'],
     ['missing 0x prefix', 'ab'.repeat(32)],
-    ['trailing newline', PLACEHOLDER_KEY + '\n'],
+    // Not a trailing newline: that is trimmed and accepted, because it is how the key
+    // actually arrives (see "the key survives the whitespace it actually arrives with").
+    // A newline in the MIDDLE is a real paste error that trimming cannot repair.
+    ['split across two lines', PLACEHOLDER_KEY.slice(0, 34) + '\n' + PLACEHOLDER_KEY.slice(34)],
     ['quoted', `"${PLACEHOLDER_KEY}"`],
   ];
 
