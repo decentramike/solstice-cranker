@@ -39,6 +39,9 @@ on:
     # does not simulate, so every run inside its send window broadcasts, and ten-minute
     # runs mean six reverted transactions an hour for the length of the window. Still cheap
     # -- well under 0.1 FIL a quarter -- but no longer free.
+    #
+    # CALIBNET ONLY. When NETWORK moves to mainnet, change this to weekly -- see
+    # docs/RUNBOOK.md "Moving to mainnet", step 5, and what weekly costs.
     - cron: '7,17,27,37,47,57 * * * *'
   workflow_dispatch:
     inputs:

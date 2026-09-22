@@ -16,6 +16,7 @@ Read [`WALLET.md`](WALLET.md) before you handle a key. Read the
 - [What each alert means](#what-each-alert-means)
 - [What to do if `NotLatestQuarter` fires](#what-to-do-if-notlatestquarter-fires)
 - [The rehearsal weekend: pause and un-pause](#the-rehearsal-weekend-pause-and-un-pause)
+- [Moving to mainnet](#moving-to-mainnet)
 - [Topping up the wallet](#topping-up-the-wallet)
 - [Rotating the key](#rotating-the-key)
 - [Changing an RPC endpoint](#changing-an-rpc-endpoint)
@@ -304,6 +305,73 @@ Write it up. Do not treat it as an incident.
 3. Close the watchdog issue with a link to the write-up.
 
 ---
+
+## Moving to mainnet
+
+Not before the rehearsal ends on 7 October — and there is no rush after it. Mainnet
+activates Monday 12 October 2026 13:00 UTC, but its first quarter does not bind until
+**Thursday 21 January 2027, 20:27 UTC**. Switch any time before that.
+
+| Mainnet quarter | Binds (crank due) | Submit window closes |
+| :-- | :-- | :-- |
+| Q1 | Thu 21 Jan 2027 20:27 UTC | Fri 23 Apr 2027 03:54 UTC |
+| Q2 | Fri 23 Apr 2027 03:54 UTC | Fri 23 Jul 2027 11:21 UTC |
+| Q3 | Fri 23 Jul 2027 11:21 UTC | Fri 22 Oct 2027 18:48 UTC |
+| Q4 | Fri 22 Oct 2027 18:48 UTC | Sat 22 Jan 2028 02:15 UTC |
+
+A mainnet quarter is 262,974 epochs — 91.3 days, not a whole number — so binding drifts
+about seven hours later each quarter. That is why the times above are not round.
+
+### The switchover, in order
+
+1. **New wallet.** A separate key, never the calibnet one. Follow
+   [`WALLET.md`](WALLET.md) §1 and write it to `~/.solstice/cranker-mainnet.key`.
+2. **Fund it** with ~1 FIL from an FF operational wallet. That is several years of gas.
+3. **Secrets:**
+   - `CRANKER_PRIVATE_KEY` ← the mainnet key:
+     `gh secret set CRANKER_PRIVATE_KEY --repo decentramike/solstice-cranker < ~/.solstice/cranker-mainnet.key`
+   - `RPC_URL` ← `https://api.node.glif.io/rpc/v1`
+4. **Variables:**
+   - `NETWORK` ← `mainnet`
+   - **Delete `CRANK_DISABLED_DAYS`.** Those are rehearsal dates. Left in place they do
+     nothing harmful on mainnet, but they are a trap for whoever reads them next.
+5. **Cadence → weekly.** In `.github/workflows/solstice-crank.yml`, replace the
+   ten-minute schedule with:
+
+   ```yaml
+   - cron: '37 14 * * 3'   # Wednesdays 14:37 UTC
+   ```
+
+   Ten minutes is for calibnet, where a quarter is one day and every attempt counts. See
+   the note below on what weekly costs.
+6. **Verify, in this order:**
+   - `NETWORK=mainnet npm run preflight` — must report **chain 314**. The SRA and SWA have
+     the *same address on calibnet and mainnet*, so a correct address proves nothing; the
+     chain-id check is what proves you are on mainnet. If you changed `NETWORK` but not
+     `RPC_URL`, this is where it fails, loudly: `RPC reports chain 314159 but NETWORK=mainnet
+     expects 314`.
+   - Actions → Solstice crank → **Run workflow** with `dry_run` ticked. Confirm the log shows
+     the *mainnet* wallet address and its balance.
+
+### What weekly costs
+
+Chosen deliberately, with these numbers in view. On the delivery GitHub showed this repo in
+its first day live — about 20% of scheduled runs — weekly gives 13 attempts per 91-day
+window:
+
+| Cadence | Attempts per window | Chance a quarter's window passes with none delivered | Chance of losing ≥1 share map per year |
+| :-- | --: | --: | --: |
+| Weekly | 13 | 5.5% | ~20% |
+| Daily | 91 | ~0% | ~0% |
+
+That 20% is a first-day figure for a brand-new repo and should improve with history and the
+keepalive, so treat it as a ceiling, not a forecast. The second cost is quieter:
+`quarterlyGateCheck` has no deadline, but the w2 weight step is delayed by exactly as long as
+the check is late, and f02 burns the difference in the meantime. Weekly allows that delay to
+run to seven days a quarter; daily caps it at one.
+
+If either matters more than the Actions-list noise, `'37 14 * * *'` is daily. The watchdog
+is the backstop either way — but it is on the same scheduler.
 
 ## Topping up the wallet
 
