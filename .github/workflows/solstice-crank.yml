@@ -18,10 +18,28 @@ name: Solstice crank
 
 on:
   schedule:
-    # :23 past the hour. GitHub's scheduler is heavily oversubscribed on the hour and
-    # delays those runs the most. Scheduled runs are best-effort regardless -- the
-    # watchdog workflow is the backstop, not this cron.
-    - cron: '23 * * * *'
+    # Every ten minutes, on odd minutes, never :00 or :30.
+    #
+    # Hourly was not enough, and this is measured rather than assumed. In the first day
+    # live, GitHub delivered 4 of 20 scheduled hourly runs -- 20%, at :56, :24, :41 and :40
+    # rather than :23. Scheduled runs are best-effort and dropped outright under load, and
+    # a low-activity public repo gets little priority. At that rate an hourly cron is a
+    # run every five hours, which is a thin margin against a 24-hour submit window and none
+    # at all if the drops cluster.
+    #
+    # Six attempts an hour at 20% delivery is still roughly one run an hour. And the extra
+    # attempts are free in every sense that matters:
+    #   - Actions minutes cost nothing on a public repo with standard runners.
+    #   - scripts/crank.mjs simulates before it sends and reads lastSubmittedQuarter, so a
+    #     run with nothing due broadcasts nothing and spends no gas.
+    #   - It cannot double-send. The concurrency group below serialises runs, and a run
+    #     that starts after a successful one sees the quarter already submitted.
+    #
+    # If you switch this workflow to scripts/crank-simple.mjs, revisit this: that cranker
+    # does not simulate, so every run inside its send window broadcasts, and ten-minute
+    # runs mean six reverted transactions an hour for the length of the window. Still cheap
+    # -- well under 0.1 FIL a quarter -- but no longer free.
+    - cron: '7,17,27,37,47,57 * * * *'
   workflow_dispatch:
     inputs:
       dry_run:
