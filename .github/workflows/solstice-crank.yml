@@ -55,6 +55,21 @@ on:
         type: string
         required: false
         default: ''
+      force_call:
+        # For the rehearsal rows that expect a REVERTED message in the watchtower. The cranker
+        # proper simulates first and never sends a call it knows will fail; this sends one named
+        # call without that check. Manual only: a scheduled run has no inputs, so this is always
+        # 'none' there, and scripts/crank-force.mjs refuses a scheduled trigger regardless.
+        description: 'Force-send ONE call without the pre-send check (for scripted reverts). Leave on none for a normal crank.'
+        type: choice
+        required: false
+        default: 'none'
+        options: ['none', 'quarterlyGateCheck', 'submitShares']
+      force_quarter:
+        description: 'Quarter for a forced submitShares. Ignored otherwise.'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -123,7 +138,18 @@ jobs:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
-        run: node scripts/crank.mjs
+
+          # --- manual force-send; empty on every scheduled run ---
+          CRANK_FORCE_CALL: ${{ inputs.force_call }}
+          CRANK_FORCE_QUARTER: ${{ inputs.force_quarter }}
+        # Inputs are read from the environment, never interpolated into the script, so no
+        # input value can become shell. On a schedule CRANK_FORCE_CALL is empty.
+        run: |
+          if [ -n "${CRANK_FORCE_CALL:-}" ] && [ "$CRANK_FORCE_CALL" != "none" ]; then
+            node scripts/crank-force.mjs
+          else
+            node scripts/crank.mjs
+          fi
 
       - name: Point at the runbook on failure
         if: failure()

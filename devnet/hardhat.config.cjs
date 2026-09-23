@@ -28,6 +28,12 @@ module.exports = {
       chainId: 3141592,
       allowUnlimitedContractSize: false,
       mining: { auto: true, interval: 0 },
+      // Mine a reverting transaction and return its hash, rather than answering the send with an
+      // error. Hardhat's default does the latter, which is not how Filecoin behaves: Lotus accepts
+      // the message and it lands on chain as a failed message (exit code 33). A devnet that throws
+      // at send time would make scripts/crank-force.mjs report "nothing reached the chain" here
+      // for a message that, on calibnet, would have landed.
+      throwOnTransactionFailures: false,
       // Deterministic, publicly-documented Hardhat test accounts. These hold nothing
       // and exist only on this ephemeral local chain.
       accounts: { count: 10, accountsBalance: '10000000000000000000000' },
