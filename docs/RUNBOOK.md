@@ -28,9 +28,9 @@ Read [`WALLET.md`](WALLET.md) before you handle a key. Read the
 
 ## Go-live checklist
 
-The contracts are not deployed yet ([solstice#51](https://github.com/filecoin-project/solstice/issues/51)).
-Until they are, `SRA_ADDRESS` and `SWA_ADDRESS` are the zero address and the cranker
-refuses to run. When the deployment lands:
+The calibnet contracts are deployed ([solstice#51](https://github.com/filecoin-project/solstice/issues/51))
+and the committed config points at them. If they are ever redeployed — as they were once,
+for the move to the 28 September plan — the steps are the same:
 
 1. `npm run sync:deployments` locally. It pulls upstream's `deployments.json` and
    rewrites `config/networks.json`. Review the diff. Open a PR.
@@ -183,7 +183,7 @@ A run that sends nothing is the normal case. Most hours there is nothing due.
 | Low balance | warn | Wallet below `CRANK_MIN_BALANCE_FIL`. Still working, for now. | [Top up the wallet](#topping-up-the-wallet). Do it the same day. An empty wallet is how a deadline gets missed. |
 | RPC unreachable / chain id mismatch | warn | The endpoint is down, rate-limited, or pointing at the wrong network. | Check the endpoint's status page. [Change the RPC endpoint](#changing-an-rpc-endpoint) if it stays down. The hourly retry covers a short outage. |
 | `chainAgreesWithConfig: false` | warn | The schedule derived from `postPeriod` / `verificationWindow` disagrees with what the chain has bound. | Stop. Pause the cranker. Compare the config against the deployment parameters and fix the config before resuming. |
-| Contract address is `0x0000…0000` | warn | Not deployed yet, or the variable is unset. | Expected until [solstice#51](https://github.com/filecoin-project/solstice/issues/51) lands. After that, see [Changing a contract address](#changing-a-contract-address). |
+| Contract address is `0x0000…0000` | warn | The network has no deployment, or an override variable is blank. | See [Changing a contract address](#changing-a-contract-address). |
 | Watchdog issue opened | warn | A crank is overdue on chain, whatever the crank job's own runs say. | Work the issue. Start with `npm run preflight`, then the crank workflow's recent runs. |
 | **`NotLatestQuarter(q)`** | **critical** | **The submission window for quarter q has closed. Its share map is gone.** | [Follow the escalation below.](#what-to-do-if-notlatestquarter-fires) Do not retry. |
 
@@ -222,89 +222,99 @@ The response is escalation and documentation.
 
 ## The rehearsal weekend: pause and un-pause
 
-Phase 1 is one governance quarter per day on calibnet, activation Wednesday 23 September
-2026 13:00 UTC through Wednesday 7 October.
+The plan is **"Rehearsal Plan for Sept 28th start"** in the rehearsal doc. An earlier 23 September
+plan was superseded, and the SRA and SWA were **redeployed** for this one:
 
-**Two clocks, six hours apart.** The quarter boundary is **13:00 UTC** (quarter Q runs 13:00
-to 13:00). Binding is **19:00 UTC** — boundary plus `POST_PERIOD` 2 h plus
-`VERIFICATION_WINDOW` 4 h — and binding is when `submitShares(Q)` becomes callable, so 19:00
-is when the cranker acts. Posting for Q opens only after Q has ended, so each quarter's
-cycle runs on the following day.
+| | Current (Sept 28 plan) | Superseded (Sept 23 plan) |
+| :-- | :-- | :-- |
+| SRA | `0x0339f205314C8210AF7Cb075d1A96D012e7896a9` | `0xeDfCd0947F7E9d58E0035f032520d75ce8eCA451` |
+| SWA | `0x66C11A9F6dfEC3c1557958cF9f575a023EB01421` | `0xDE4fBd083F18f96C241DdE0A83C3EDC422Be9BA6` |
+| Activation | Mon 28 Sep 13:00 UTC, epoch 4109134 | Wed 23 Sep 13:00 UTC, epoch 4094734 |
 
-**There are two no-crank weekends, not one:**
+The superseded pair is still live on chain. Nothing reads it — the watchtower's SRA and SWA are
+the current pair, confirmed by matching the ERC-1967 implementation slot of each proxy against
+the implementation the watchtower shows. **If the addresses ever move again, run
+`npm run sync:deployments -- --write` and `npm run preflight` before anything else.**
+
+**Two clocks, six hours apart.** The quarter boundary is 13:00 UTC. Binding is 19:00 UTC —
+boundary plus `POST_PERIOD` 2 h plus `VERIFICATION_WINDOW` 4 h — and binding is when
+`submitShares(Q)` becomes callable, so 19:00 is when the cranker acts.
 
 | Quarter | Binds | Scenario |
 | :-- | :-- | :-- |
-| Q3 | Sat 26 Sep 19:00 | Weekend post, no cranks. Value binds and waits for Monday. |
-| Q4 | Sun 27 Sep 19:00 | Weekend fail. Binds 0. |
-| Q10 | Sat 03 Oct 19:00 | Weekend post, no cranks. |
-| Q11 | Sun 04 Oct 19:00 | Weekend, no action. |
+| Q1 | Tue 29 Sep 19:00 | Bootstrap, no gate |
+| Q2 | Wed 30 Sep 19:00 | First gate pass |
+| Q3 | Thu 01 Oct 19:00 | Orchestrator negatives, correction |
+| Q4 | Fri 02 Oct 19:00 | Admit B, temporary stream queued |
+| **Q5** | **Sat 03 Oct 19:00** | **Weekend post, no cranks** |
+| **Q6** | **Sun 04 Oct 19:00** | **Weekend fail, no action** |
+| Q7 | Mon 05 Oct 19:00 | Catch-up, stream removal |
+| Q8–Q10 | Tue 06 – Thu 08 Oct 19:00 | Through to the 50% cap |
+| Q11 | Fri 09 Oct 19:00 | Terminal state |
 
-Catch-up runs Monday 28 September (Q5 cycle) and Monday 5 October (Q12 cycle). The
-rehearsal plan gives the actor for every catch-up call as "Any" — these are permissionless,
-so either the cranker or a person can send them.
+### The pause — set it once, now
 
-### Before the weekend — by Friday 25 September
+Settings → Secrets and variables → Actions → **Variables**:
 
-1. Settings → Secrets and variables → Actions → **Variables** → **New repository variable**.
-2. Name `CRANK_DISABLED_DAYS`, value `2026-09-26,2026-09-27,2026-10-03,2026-10-04`.
-   Set all four dates now; do not come back for the second weekend.
-3. Actions → *Solstice crank* → **Run workflow** with **dry_run** checked, and confirm the
-   output says it is disabled for those dates. Do this on Friday, not on Saturday — you
-   want to find a typo while there is time to fix it.
+- **`CRANK_PAUSED_WINDOWS`** = `2026-10-03T19:00:00Z/2026-10-05T13:25:00Z`
+- **Delete `CRANK_DISABLED_DAYS`** if it is still set. It held the superseded plan's dates.
 
-Use the variable rather than disabling the workflow. The job keeps running hourly, keeps
-reading chain state and keeps reporting, and just does not send. You keep the
-observability, the watchdog keeps working, and there is nothing to remember to switch back
-on if you are hit by a bus on Sunday.
+The window is exact and expires by itself, so it can be set today and forgotten. Both ends are
+deliberate:
 
-The watchdog will notice the missed cranks and open an issue. That is correct — it is what
-the weekend is testing. Leave the issue open, note in a comment that it is the planned
-Q3/Q4 (or Q10/Q11) test, and close it after the Monday catch-up.
+- **Start, Sat 19:00 — the instant Q5 binds, not midnight.** Q4's submit window closes at that
+  same instant. If GitHub dropped Friday's runs, Saturday daytime is Q4's last chance.
+- **End, Mon 13:25 — not midnight.** The temporary stream takes effect at 13:00, and the plan's
+  `QuarterlyGateCheck(Q5)` at 13:45 is supposed to revert for lack of headroom. Released at
+  00:00, the cranker would check Q5 thirteen hours early, before the stream exists, and the
+  check could pass — changing the scenario's outcome, not just when it happens.
 
-### The share maps these weekends destroy — expected, and not recoverable
+The watchdog will flag Q5 as overdue across the weekend. That is correct; it is the finding the
+weekend exists to produce. Leave its issue open and close it after Monday.
 
-Each weekend permanently loses one quarter's share map, by design. On the Monday, one
-`SubmitShares` installs the *latest* bound quarter's map and supersedes the earlier one:
-Q3 is superseded by Q4's submission, and Q10 by Q11's. `submitShares` only ever accepts the
-latest bound quarter, so there is no ordering that saves both.
+### The share map the weekend destroys — expected, and not recoverable
 
-The cranker reports this as a **critical alert and exits 1** on the run that first sees the
-gap, and names the lost quarter in `schedule.missedQuarters`. **That is the rehearsal
-working.** Note it against the planned scenario and move on. Do not treat it as a cranker
-defect, and do not attempt a resubmission — the contract will reject it.
+Monday's single `SubmitShares` installs Q6's map and supersedes Q5's. `submitShares` only ever
+accepts the latest bound quarter, so there is no ordering that saves both. The cranker reports
+Q5 as a **critical alert and exits 1** on the run that first sees the gap. That is the rehearsal
+working. Note it against the scenario; do not treat it as a cranker defect, and do not attempt a
+resubmission — the contract will reject it.
 
-### Monday 28 September (and Monday 5 October) — the catch-up
+### What the automated cranker covers, and what needs a person
 
-The plan schedules Monday's catch-up for 13:15–13:45 UTC on 28 September and 13:30 onward
-on 5 October. Date-based pausing releases the cranker at 00:00 UTC Monday, so it will catch
-up on its first hourly run — same end state, roughly twelve hours earlier than the script.
-If the watchtower needs the scripted timestamps, disable the workflow in the Actions tab for
-the weekend instead and re-enable it around 13:00 Monday.
+**Every successful crank in the plan is automated**, and each one appears in the watchtower's P2
+as a `SharesSubmitted` or `QuarterlyGateCheckResult` event. The watchtower reads the SRA and
+SWA directly and does not care who sent the message.
 
-To send the catch-up by hand instead:
+**Five rows expect a reverted message in P2, and the automated cranker will not produce them.**
+It simulates every call first and never broadcasts one it knows will fail — which is what keeps
+it from burning gas every ten minutes. So these scripted negative tests need a person:
 
-Send the outstanding calls manually, in a fixed order, one at a time, confirming each
-before starting the next. Record the transaction hash of each.
+| When (UTC) | Call | Expected revert | Watchtower expects |
+| :-- | :-- | :-- | :-- |
+| Tue 29 Sep 19:00 | `quarterlyGateCheck()` | `NotBound(2)` | P2: reverted, nothing queued |
+| Thu 01 Oct 19:15 | `submitShares(3)`, a second time | `AlreadySubmitted(3)` | P2: reverted |
+| Mon 05 Oct 13:45 | `quarterlyGateCheck()` | no headroom (temporary stream) | re-attemptable, step not consumed |
+| Mon 05 Oct 20:40 | `quarterlyGateCheck()` | Q5's step still in its 6 h hold | P2: reverted, nothing queued |
+| Fri 09 Oct 19:15 | `quarterlyGateCheck()` | no step above the 50% cap | P2: reverted at the cap |
 
-1. `npm run preflight` — confirm connectivity and balance first.
-2. `npm run crank:dry` — read the decision. It should list the outstanding quarters.
-3. Send. The order is submissions before gate checks, oldest quarter first.
-4. After each, confirm the `SharesSubmitted` or `QuarterlyGateCheckResult` event on the
-   explorer (`https://calibration.filfox.info/en/message/<txhash>`) before sending the next.
+The cranker still *sees* each of these — the decoded revert is in that run's log — it just does
+not put a failed transaction on chain. The 13:45 row is satisfied anyway: the check is
+demonstrably re-attemptable when it passes at 20:30.
 
-Expect `NotLatestQuarter` on the older of the two missed quarters if both windows closed.
-On calibnet that is the rehearsal working: it is the finding the weekend exists to produce.
-Write it up. Do not treat it as an incident.
+### Timestamps will not match the script exactly
 
-### After the catch-up
+The plan is minute-by-minute. The automated cranker reproduces every **outcome**, on its own
+clock, and GitHub has been delivering this repo's scheduled runs roughly every five to six
+hours regardless of the cron. Two consequences:
 
-1. **Delete** the `CRANK_DISABLED_DAYS` variable. Do not set it to empty.
-2. Run the crank workflow once manually with **dry_run** checked and confirm it is live
-   again.
-3. Close the watchdog issue with a link to the write-up.
-
----
+- **Routine 19:00 cranks may land hours late** — still well inside each 24-hour window, so no
+  share map is at risk, but not at 19:00. If the watchtower timeline needs the minute, press
+  **Run workflow** at the scripted time. It is permissionless and cannot double-send, so a
+  manual press is always safe.
+- **Tuesday's Q7 gate step will land early.** The script re-runs `QuarterlyGateCheck(Q7)` at
+  Tue 08:00, so its step lands about 14:00. The cranker retries until Q5's 6-hour hold clears
+  around 02:30 and lands the step about 08:30 instead. Same end state, about six hours sooner.
 
 ## Moving to mainnet
 

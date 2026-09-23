@@ -445,6 +445,44 @@ describe('the key survives the whitespace it actually arrives with', () => {
   });
 });
 
+describe('CRANK_PAUSED_WINDOWS', () => {
+  const W = '2026-10-03T19:00:00Z/2026-10-05T13:25:00Z';
+
+  it('is half-open: paused from the start instant, running again at the end instant', () => {
+    assert.equal(resolvePause(new Date('2026-10-03T19:00:00Z'), { CRANK_PAUSED_WINDOWS: W }).paused, true);
+    assert.equal(resolvePause(new Date('2026-10-05T13:25:00Z'), { CRANK_PAUSED_WINDOWS: W }).paused, false);
+  });
+
+  it('names the window and its end in the reason, so the log says when it will resume', () => {
+    const r = resolvePause(new Date('2026-10-04T12:00:00Z'), { CRANK_PAUSED_WINDOWS: W });
+    assert.match(r.reason, /2026-10-05T13:25:00\.000Z/);
+  });
+
+  it('accepts several windows, and explicit offsets as well as Z', () => {
+    const env = { CRANK_PAUSED_WINDOWS: `${W}, 2026-10-10T00:00:00+02:00/2026-10-10T06:00:00+02:00` };
+    assert.equal(resolvePause(new Date('2026-10-09T23:00:00Z'), env).paused, true, '01:00 +02:00');
+    assert.equal(resolvePause(new Date('2026-10-10T05:00:00Z'), env).paused, false, '07:00 +02:00');
+  });
+
+  for (const [label, bad] of [
+    ['no timezone -- runner-local time is exactly the ambiguity to refuse', '2026-10-03T19:00/2026-10-05T13:25'],
+    ['only one end', '2026-10-03T19:00:00Z'],
+    ['end before start', '2026-10-05T13:25:00Z/2026-10-03T19:00:00Z'],
+    ['a date with no time', '2026-10-03/2026-10-05'],
+  ]) {
+    it(`refuses ${label}, loudly, at config load`, () => {
+      assert.throws(
+        () => loadConfig({ NETWORK: 'calibnet', CRANKER_PRIVATE_KEY: PLACEHOLDER_KEY, CRANK_PAUSED_WINDOWS: bad }),
+        /CRANK_PAUSED_WINDOWS/
+      );
+    });
+  }
+
+  it('a blank value, as GitHub passes an unset variable, pauses nothing', () => {
+    assert.equal(resolvePause(new Date('2026-10-04T12:00:00Z'), { CRANK_PAUSED_WINDOWS: '' }).paused, false);
+  });
+});
+
 describe('describeConfig never leaks a secret', () => {
   const SECRET_PATH_SEGMENT = 'sk-live-abcdef0123456789';
   const SECRET_QUERY_VALUE = 'qk-live-9876543210fedcba';

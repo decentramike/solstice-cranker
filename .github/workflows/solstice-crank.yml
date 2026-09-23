@@ -106,6 +106,7 @@ jobs:
           # --- pausing; see docs/RUNBOOK.md, "Rehearsal weekend" ---
           CRANK_PAUSED: ${{ vars.CRANK_PAUSED }}
           CRANK_DISABLED_DAYS: ${{ vars.CRANK_DISABLED_DAYS }}
+          CRANK_PAUSED_WINDOWS: ${{ vars.CRANK_PAUSED_WINDOWS }}
           CRANK_DISABLED_WEEKDAYS: ${{ vars.CRANK_DISABLED_WEEKDAYS }}
 
           # --- behaviour ---

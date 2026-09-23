@@ -45,6 +45,41 @@ function optionalAddress(env, name) {
   return getAddress(v);
 }
 
+/**
+ * Parses CRANK_PAUSED_WINDOWS: comma-separated ISO 8601 intervals, `start/end`, half-open.
+ *
+ *   2026-10-03T19:00:00Z/2026-10-05T13:25:00Z
+ *
+ * Each end MUST carry an explicit timezone (Z or ±hh:mm). A bare "2026-10-03T19:00" is
+ * local time in whatever zone the runner happens to be in, which is exactly the ambiguity
+ * that turns a correct pause into one six hours off. A malformed window throws rather than
+ * being skipped: silently not pausing would break the scenario the window exists to protect,
+ * and a run that fails on config is visible the moment the variable is set.
+ */
+function parsePauseWindows(raw) {
+  if (!raw) return [];
+  const ZONED = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const parts = entry.split('/');
+      if (parts.length !== 2 || !ZONED.test(parts[0]) || !ZONED.test(parts[1])) {
+        throw new ConfigError(
+          `CRANK_PAUSED_WINDOWS entry "${entry}" is not start/end with explicit timezones`,
+          'use e.g. 2026-10-03T19:00:00Z/2026-10-05T13:25:00Z'
+        );
+      }
+      const start = new Date(parts[0]);
+      const end = new Date(parts[1]);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+        throw new ConfigError(`CRANK_PAUSED_WINDOWS entry "${entry}" must end after it starts`);
+      }
+      return { start, end, raw: entry };
+    });
+}
+
 /** UTC weekday name, e.g. "Saturday". Pause rules are expressed in UTC because quarter boundaries are. */
 function utcWeekday(date) {
   return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][date.getUTCDay()];
@@ -61,6 +96,20 @@ export function resolvePause(now = new Date(), rawEnv = process.env) {
   const env = withoutBlanks(rawEnv);
   if (truthy(env.CRANK_PAUSED)) {
     return { paused: true, reason: 'CRANK_PAUSED is set' };
+  }
+
+  // Exact-instant windows, for when a whole calendar day is the wrong shape. The rehearsal
+  // needed this: the no-crank weekend has to start the moment Q5 binds (Saturday 19:00, so a
+  // late Q4 is not stranded -- its deadline is that same instant) and end after Monday's
+  // temporary stream takes effect (13:00), or the scripted "gate check reverts for lack of
+  // headroom" would instead run at 00:00 before the stream exists, and might pass.
+  for (const window of parsePauseWindows(env.CRANK_PAUSED_WINDOWS)) {
+    if (now >= window.start && now < window.end) {
+      return {
+        paused: true,
+        reason: `inside CRANK_PAUSED_WINDOWS ${window.raw} (until ${window.end.toISOString()})`,
+      };
+    }
   }
 
   const days = (env.CRANK_DISABLED_DAYS ?? '')
@@ -163,6 +212,10 @@ export function loadConfig(rawEnv = process.env, { requireKey = true } = {}) {
       throw new ConfigError('CRANK_TARGET_QUARTER must be an integer >= 1 (quarter 0 is never submittable)');
     }
   }
+
+  // Validated here as well as when it is used, so a malformed window fails the run on its
+  // first line with a sentence that says what to fix -- not mid-run, after state was read.
+  parsePauseWindows(env.CRANK_PAUSED_WINDOWS);
 
   const maxGateCatchup = Number(env.CRANK_MAX_GATE_CATCHUP ?? 8);
   if (!Number.isInteger(maxGateCatchup) || maxGateCatchup < 1 || maxGateCatchup > 64) {

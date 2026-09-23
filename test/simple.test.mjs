@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { bindingEpoch, expiryEpoch } from '../src/schedule.mjs';
+import { resolvePause } from '../src/config.mjs';
 
 const NETWORKS = JSON.parse(readFileSync(new URL('../config/networks.json', import.meta.url), 'utf8'));
 
@@ -81,19 +82,26 @@ describe('the calibnet rehearsal lands on the days the plan says', () => {
   const net = NETWORKS.calibnet;
   const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-  // From the rehearsal plan: activation Wed 2026-09-23 13:00 UTC, one quarter per day,
-  // each quarter's cycle running the following day and binding six hours in.
+  // From "Rehearsal Plan for Sept 28th start": activation Mon 2026-09-28 13:00 UTC at epoch
+  // 4109134, one quarter per day, each quarter's cycle running the following day and binding
+  // six hours in. This block pins the calendar deliberately -- when the plan moved from its
+  // 23 September start to this one, these assertions failed, which is how the redeploy was
+  // caught before the cranker spent Thursday cranking the abandoned contracts.
   const EXPECTED = {
-    1: '2026-09-24T19:00:00Z',
-    2: '2026-09-25T19:00:00Z',
-    3: '2026-09-26T19:00:00Z', // Sat -- no cranks
-    4: '2026-09-27T19:00:00Z', // Sun -- no cranks
-    5: '2026-09-28T19:00:00Z', // Mon -- catch-up
-    10: '2026-10-03T19:00:00Z', // Sat -- no cranks
-    11: '2026-10-04T19:00:00Z', // Sun -- no cranks
-    12: '2026-10-05T19:00:00Z', // Mon -- catch-up
-    14: '2026-10-07T19:00:00Z', // end of the rehearsal
+    1: '2026-09-29T19:00:00Z',  // Tue -- bootstrap, no gate
+    2: '2026-09-30T19:00:00Z',  // Wed -- first gate pass
+    3: '2026-10-01T19:00:00Z',  // Thu
+    4: '2026-10-02T19:00:00Z',  // Fri
+    5: '2026-10-03T19:00:00Z',  // Sat -- no cranks
+    6: '2026-10-04T19:00:00Z',  // Sun -- no cranks
+    7: '2026-10-05T19:00:00Z',  // Mon -- catch-up day
+    11: '2026-10-09T19:00:00Z', // Fri -- terminal state
   };
+
+  it('activates when the plan says: Mon 28 Sep 13:00 UTC, epoch 4109134', () => {
+    assert.equal(net.activationEpoch, 4109134);
+    assert.equal(net.genesisUnix + net.activationEpoch * net.epochSeconds, utc('2026-09-28T13:00:00Z'));
+  });
 
   for (const [q, when] of Object.entries(EXPECTED)) {
     it(`Q${q} fires at ${when}`, () => {
@@ -101,29 +109,56 @@ describe('the calibnet rehearsal lands on the days the plan says', () => {
     });
   }
 
-  it('the four no-crank days are the ones CRANK_DISABLED_DAYS names', () => {
-    const paused = ['2026-09-26', '2026-09-27', '2026-10-03', '2026-10-04'];
-    const firesOn = (q) => new Date(bindingTime(net, q) * 1000).toISOString().slice(0, 10);
-    for (const q of [3, 4, 10, 11]) {
-      assert.ok(paused.includes(firesOn(q)), `Q${q} fires on ${firesOn(q)}, which is not paused`);
-    }
-    // And the quarters either side must NOT be suppressed.
-    for (const q of [2, 5, 9, 12]) {
-      assert.ok(!paused.includes(firesOn(q)), `Q${q} fires on ${firesOn(q)}, which is paused but should not be`);
-    }
+  it('the weekend quarters fire on an actual Saturday and Sunday', () => {
+    assert.equal(DAY[new Date(bindingTime(net, 5) * 1000).getUTCDay()], 'Sat');
+    assert.equal(DAY[new Date(bindingTime(net, 6) * 1000).getUTCDay()], 'Sun');
   });
 
-  it('every weekend quarter fires on an actual weekend day', () => {
-    for (const q of [3, 10]) {
-      assert.equal(DAY[new Date(bindingTime(net, q) * 1000).getUTCDay()], 'Sat', `Q${q}`);
-    }
-    for (const q of [4, 11]) {
-      assert.equal(DAY[new Date(bindingTime(net, q) * 1000).getUTCDay()], 'Sun', `Q${q}`);
-    }
+  it("Q5's deadline is exactly when Q6 binds, which is why the weekend costs it", () => {
+    assert.equal(bindingTime(net, 6), bindingTime(net, 5) + 24 * 3600);
+  });
+});
+
+describe('the rehearsal pause window does exactly what the plan needs', () => {
+  const net = NETWORKS.calibnet;
+  // The value set in the repository variable CRANK_PAUSED_WINDOWS.
+  const WINDOW = '2026-10-03T19:00:00Z/2026-10-05T13:25:00Z';
+  const env = { CRANK_PAUSED_WINDOWS: WINDOW };
+  const pausedAt = (iso) => resolvePause(new Date(iso), env).paused;
+  const at = (q) => new Date(bindingTime(net, q) * 1000).toISOString();
+
+  it('suppresses the two weekend quarters at the instant each binds', () => {
+    assert.equal(pausedAt(at(5)), true, 'Q5 must not be cranked -- "nobody cranks"');
+    assert.equal(pausedAt(at(6)), true, 'Q6 must not be cranked');
   });
 
-  it("Q3's deadline is exactly when Q4 binds, which is why the weekend costs it", () => {
-    assert.equal(bindingTime(net, 4), bindingTime(net, 3) + 24 * 3600);
-    assert.equal(bindingTime(net, 11), bindingTime(net, 10) + 24 * 3600);
+  it('does NOT start at Saturday midnight, so a late Q4 can still be rescued', () => {
+    // Q4 binds Fri 19:00 and its window closes the instant Q5 binds, Sat 19:00. If GitHub
+    // dropped Friday's runs, Saturday daytime is Q4's last chance; a midnight start would
+    // throw it away for nothing.
+    assert.equal(pausedAt('2026-10-03T00:00:00Z'), false);
+    assert.equal(pausedAt('2026-10-03T18:59:59Z'), false);
+    assert.equal(pausedAt('2026-10-03T19:00:00Z'), true);
+  });
+
+  it("stays paused through Monday morning, past the temporary stream's 13:00 start", () => {
+    // The plan's QuarterlyGateCheck(Q5) at 13:45 must REVERT for lack of headroom, which
+    // needs the temporary stream -- effective 13:00 -- to exist. Released at 00:00, the
+    // cranker would check Q5 thirteen hours early, before the stream, and it could pass.
+    assert.equal(pausedAt('2026-10-05T00:00:00Z'), true);
+    assert.equal(pausedAt('2026-10-05T13:00:00Z'), true, 'still paused as the stream takes effect');
+    assert.equal(pausedAt('2026-10-05T13:24:59Z'), true);
+  });
+
+  it('releases in time for the scripted Monday catch-up and for Q7', () => {
+    assert.equal(pausedAt('2026-10-05T13:25:00Z'), false, 'end is exclusive');
+    assert.equal(pausedAt('2026-10-05T13:30:00Z'), false, 'the 13:30 SubmitShares');
+    assert.equal(pausedAt(at(7)), false, 'Q7 binds Mon 19:00 and must be cranked');
+  });
+
+  it('leaves every weekday quarter alone', () => {
+    for (const q of [1, 2, 3, 4, 7, 8, 9, 10, 11]) {
+      assert.equal(pausedAt(at(q)), false, `Q${q}`);
+    }
   });
 });

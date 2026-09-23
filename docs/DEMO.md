@@ -46,9 +46,9 @@ Leave yourself a way out: know how to stop it (`Ctrl-C` in the terminal running 
 to start again from scratch (stop, `rm -rf devnet/.deployed.json devnet/.state`, start again).
 
 **Two things to say out loud at the start, because someone will ask and it is better coming
-from you:** this is a local chain, not calibnet or mainnet; and the SRA and SWA are not
-deployed on any public network yet, which is tracked as
-[solstice#51](https://github.com/filecoin-project/solstice/issues/51).
+from you:** this is a local chain, not calibnet or mainnet — it runs the same SRA and SWA code, with the
+quarters compressed so a fortnight fits in two minutes. The real calibnet deployment is live
+and is what the [watchtower](https://solsticewatchtower.eth.limo) shows.
 
 ---
 
@@ -215,9 +215,9 @@ can send it by hand, from any funded wallet.
 multisig adds signatures to a transaction that requires none. It would add failure modes,
 not remove them.
 
-**"Is this running on mainnet now?"** No. The contracts are not deployed on any public
-network yet — [solstice#51](https://github.com/filecoin-project/solstice/issues/51). The
-cranker is complete, configured, and refuses to run against a zero address.
+**"Is this running on mainnet now?"** No — on calibnet, for the rehearsal. Mainnet's first
+quarter does not bind until January 2027, and the switchover is a documented checklist in
+`docs/RUNBOOK.md`.
 
 ---
 

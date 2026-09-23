@@ -34,16 +34,22 @@ quarter Q binds and closes when quarter Q+1 binds. On mainnet that is about 91 d
 the calibnet rehearsal, where a "quarter" is one day, it is 24 hours. Hourly cron gives
 24 attempts inside the tightest window the project ever runs.
 
-## Status: config-complete, not yet live
+## Status: live on calibnet for the rehearsal
 
-The SRA and SWA are `0x0000000000000000000000000000000000000000` on both calibnet and
-mainnet in upstream's `deployments.json`. **The contracts are not deployed yet.** That is
-tracked in [filecoin-project/solstice#51](https://github.com/filecoin-project/solstice/issues/51).
+The SRA and SWA are deployed on calibnet, and this repository cranks them on a schedule.
 
-So: nothing in this repository is cranking anything today. It is complete, configured and
-preflight-guarded, and it will refuse to run against a zero address rather than pretend.
-When the deployment lands, set two repository variables and it goes live. See
-[`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+| | Address |
+| :-- | :-- |
+| SRA | `0x0339f205314C8210AF7Cb075d1A96D012e7896a9` |
+| SWA | `0x66C11A9F6dfEC3c1557958cF9f575a023EB01421` |
+
+These are the contracts the [watchtower](https://solsticewatchtower.eth.limo) reads, for the
+rehearsal that activates Mon 28 Sep 2026 13:00 UTC. They were redeployed for that plan: an
+earlier pair for a 23 September start is still live on chain but superseded, and nothing reads
+it. The same addresses are published for mainnet, where the first quarter binds in January 2027.
+
+Addresses come from upstream's `deployments.json`. If they move again, run
+`npm run sync:deployments -- --write` and then `npm run preflight`.
 
 ## Quickstart
 
@@ -85,7 +91,8 @@ version; this table is the short one. Three further variables (`CRANK_CONFIRMATI
 | `SRA_ADDRESS` | variable | no | Overrides the committed SRA address. Set this when the deployment lands or moves. |
 | `SWA_ADDRESS` | variable | no | Same, for the SWA. |
 | `CRANK_PAUSED` | variable | no | Any truthy value: read state and report, send nothing. The big red switch. |
-| `CRANK_DISABLED_DAYS` | variable | no | Comma-separated UTC dates on which not to send. The rehearsal's two no-crank weekends: `2026-09-26,2026-09-27,2026-10-03,2026-10-04`. |
+| `CRANK_PAUSED_WINDOWS` | variable | no | Exact `start/end` ISO 8601 windows, explicit timezone required. The rehearsal's: `2026-10-03T19:00:00Z/2026-10-05T13:25:00Z`. |
+| `CRANK_DISABLED_DAYS` | variable | no | Comma-separated UTC dates on which not to send. Day-granular; prefer `CRANK_PAUSED_WINDOWS`. |
 | `CRANK_DISABLED_WEEKDAYS` | variable | no | Same idea, recurring: `Saturday,Sunday`. |
 | `CRANK_DRY_RUN` | dispatch input | no | Simulate and report, broadcast nothing. |
 | `CRANK_MAX_GATE_CATCHUP` | variable | no | Cap on `quarterlyGateCheck()` calls in one run while catching up. Default 8. |
@@ -166,48 +173,47 @@ would otherwise lose the quarter. Repeat sends inside the window just revert.
 
 ## Pausing for the rehearsal weekend
 
-Phase 1 is a calibnet rehearsal, activation Wednesday 23 September 2026 13:00 UTC through
-Wednesday 7 October, one governance quarter per day.
+Phase 1 is the calibnet rehearsal: activation **Monday 28 September 2026, 13:00 UTC** (epoch
+4109134), eleven daily quarters, Q1 on Tuesday 29 September through Q11 on Friday 9 October.
+The plan is "Rehearsal Plan for Sept 28th start" in the rehearsal doc; an earlier 23 September
+plan, and the contracts deployed for it, are superseded.
 
 Two clocks matter and they are six hours apart:
 
-- **Quarter boundary — 13:00 UTC.** Quarter Q runs 13:00 to 13:00. Posting for Q opens only
-  once Q has ended, so each quarter's cycle runs on the *following* day.
-- **Binding — 19:00 UTC.** Boundary + `POST_PERIOD` (2 h) + `VERIFICATION_WINDOW` (4 h).
-  This is when `submitShares(Q)` becomes callable, so it is when the cranker acts.
+- **Quarter boundary — 13:00 UTC.** Posting for quarter Q opens only once Q has ended, so each
+  quarter's cycle runs on the *following* day.
+- **Binding — 19:00 UTC.** Boundary + `POST_PERIOD` (2 h) + `VERIFICATION_WINDOW` (4 h). This is
+  when `submitShares(Q)` becomes callable, so it is when the cranker acts.
 
-**There are two "nobody cranks" weekends, not one.** Per the rehearsal plan:
+**One no-crank weekend:** Q5 binds Sat 3 Oct 19:00 ("weekend post, no cranks") and Q6 binds
+Sun 4 Oct 19:00 ("weekend fail, no action"). Monday 5 October is the catch-up.
 
-| Quarter | Binds | What it tests |
-| :-- | :-- | :-- |
-| Q3 | Sat 26 Sep 19:00 UTC | Weekend post, no cranks. Value binds and waits for Monday. |
-| Q4 | Sun 27 Sep 19:00 UTC | Weekend fail. Binds 0. Two quarters bound with no SubmitShares and no gate check. |
-| Q10 | Sat 03 Oct 19:00 UTC | Weekend post, no cranks. |
-| Q11 | Sun 04 Oct 19:00 UTC | Weekend, no action. |
-
-Set the repository variable `CRANK_DISABLED_DAYS` to:
+Set the repository variable **`CRANK_PAUSED_WINDOWS`** to:
 
 ```
-2026-09-26,2026-09-27,2026-10-03,2026-10-04
+2026-10-03T19:00:00Z/2026-10-05T13:25:00Z
 ```
 
-The workflow still runs hourly, still reads chain state, still reports — and sends nothing
-on those dates. That is better than disabling the workflow, because you keep the
-observability and there is nothing to remember to switch back on.
+That is an exact window, not two calendar days, and both ends matter:
 
-**Those weekends permanently destroy two share maps, by design.** Q3 is superseded when the
-Monday catch-up submits Q4, and Q10 when Q12's catch-up submits Q11. The cranker reports
-each as a critical alert and exits 1. That is the rehearsal working, not the cranker
-failing — see `docs/RUNBOOK.md` before anyone escalates it.
+- **It starts at Sat 19:00, not midnight.** Q4's window closes the instant Q5 binds. If GitHub
+  dropped Friday's runs, Saturday daytime is Q4's last chance, and a midnight start would throw
+  it away for nothing.
+- **It ends Mon 13:25, not 00:00.** Monday's temporary stream takes effect at 13:00, and the
+  plan's `QuarterlyGateCheck(Q5)` at 13:45 is supposed to *revert* for lack of headroom.
+  Released at midnight, the cranker would check Q5 thirteen hours early, before the stream
+  exists — and it could pass, changing the scenario's outcome rather than just its timestamp.
 
-**Timing note for the Monday catch-up.** The plan schedules it for Mon 13:15–13:45 UTC
-(Q5 cycle) and Mon 13:30–20:40 (Q12 cycle), actor "Any". With date-based pausing the
-cranker resumes at 00:00 UTC Monday and will catch up on its first hourly run, roughly
-twelve hours earlier than the plan's script. The end state is identical; only the timestamps
-differ. If the watchtower needs the scripted times, disable the workflow in the Actions tab
-instead and re-enable it Monday around 13:00.
+The workflow still runs, still reads chain state and still reports inside the window. It just
+sends nothing. `CRANK_DISABLED_DAYS` still works but is day-granular and is the wrong shape here.
 
-Full procedure is in [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+**The weekend permanently destroys one share map, by design.** Monday's single `SubmitShares`
+installs Q6's map and supersedes Q5's. The cranker reports that as a critical alert and exits 1.
+That is the rehearsal working, not the cranker failing — see `docs/RUNBOOK.md` before anyone
+escalates it.
+
+Full procedure, including which scripted rows need a human, is in
+[`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ## Reverts you should expect
 
@@ -286,7 +292,8 @@ PATCHES/               prepared changes to the governance repo. Not pushed.
 ## Links
 
 - Source issue: [filecoin-project/solstice#68](https://github.com/filecoin-project/solstice/issues/68) — design and run a Solstice cranker
-- Blocked on: [filecoin-project/solstice#51](https://github.com/filecoin-project/solstice/issues/51) — calibration contract deployment
+- Deployment: [filecoin-project/solstice#51](https://github.com/filecoin-project/solstice/issues/51) — calibration contract deployment (done)
+- [Solstice watchtower](https://solsticewatchtower.eth.limo) — reads the same SRA and SWA; every successful crank appears in its P2 panel
 - [FIP-0118](https://github.com/filecoin-project/FIPs/blob/master/FIPS/fip-0118.md) — the protocol rules these calls implement
 - [Solstice-Governance](https://github.com/filecoin-project/Solstice-Governance) — the operational layer; §2.2.9 and §2.3.10 are the oversight duties this automation serves
 
