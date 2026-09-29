@@ -316,6 +316,73 @@ hours regardless of the cron. Two consequences:
   Tue 08:00, so its step lands about 14:00. The cranker retries until Q5's 6-hour hold clears
   around 02:30 and lands the step about 08:30 instead. Same end state, about six hours sooner.
 
+## Reliable scheduling: an external trigger
+
+**GitHub's own schedule is not reliable enough on its own.** Measured on this repo, scheduled runs
+arrived every 5–6 hours whatever the cron asked for (16:00, 21:51, 01:21, 07:06, 14:01, 19:19 on
+28–29 Sep); the watchtower measured every 2–5 hours on its repo. On a 24-hour calibnet window that is
+four or five attempts, and on 29 Sep `SubmitShares(1)` landed 19 minutes after binding only because
+one of those gaps happened to end at 19:19.
+
+The fix is the one the watchtower already uses (its `DESIGN.md`, §5): an outside timer,
+**cron-job.org, starts the workflow every 15 minutes through the GitHub API.** A dispatched run is
+the same normal crank a button press is: it sends only what is due, cannot double-send, and still
+honours `CRANK_PAUSED_WINDOWS`. GitHub's own `schedule:` stays in place underneath as a backstop.
+
+### 1. A token that can only start workflows on this repo
+
+github.com → your avatar → **Settings → Developer settings → Personal access tokens →
+Fine-grained tokens → Generate new token**:
+
+| Field | Value |
+| :-- | :-- |
+| Token name | `solstice-cranker-dispatch` |
+| Expiration | past the rehearsal — e.g. 31 Oct 2026 |
+| Resource owner | `decentramike` |
+| Repository access | **Only select repositories** → `decentramike/solstice-cranker` |
+| Repository permissions | **Actions: Read and write.** Nothing else. (Metadata: read is added automatically.) |
+
+Generate it and copy it once; GitHub will not show it again. Paste it only into cron-job.org.
+
+**What this token can do:** start, cancel and re-run workflows on this one repo, and read their logs.
+**What it cannot do:** read any secret — the cranker's key included; GitHub never exposes secret
+values, and logs mask them — or change any file or workflow, since it has no Contents or Workflows
+permission. The worst misuse is triggering runs: normal ones send only what is due, and a forced
+revert costs about 0.0000128 FIL. If it leaks, revoke it on the same page and make another.
+
+### 2. The cron-job.org job
+
+cron-job.org → **Create cronjob**:
+
+| Field | Value |
+| :-- | :-- |
+| Title | `Solstice crank` |
+| URL | `https://api.github.com/repos/decentramike/solstice-cranker/actions/workflows/solstice-crank.yml/dispatches` |
+| Schedule | **Every 15 minutes** (:00, :15, :30, :45) |
+| Request method *(Advanced)* | **POST** |
+| Request body *(Advanced)* | `{"ref":"main"}` |
+| Headers *(Advanced)* | `Authorization: Bearer <the token>` · `Accept: application/vnd.github+json` · `X-GitHub-Api-Version: 2022-11-28` · `Content-Type: application/json` |
+
+The body names only the branch, so every input takes its default: not a dry run, no forced call — a
+normal crank. **Never add `force_call` here**; forced sends are for a person at a scripted time.
+
+Why :00/:15/:30/:45 fits the plan: GitHub takes 20–60 s to start a dispatched run, so the :00 run
+reads the chain just after each 19:00 binding; and on Mon 5 Oct, with the pause ending 13:25, the
+13:30 run lands the catch-up `SubmitShares` at the plan's scripted 13:30.
+
+### 3. Check it
+
+Press **Test run** on the job: expect **HTTP 204** with an empty body. Within a few seconds a run
+appears under Actions → Solstice crank with event **workflow_dispatch**. A 401 means the token is
+wrong; 403 means it lacks Actions: write or is scoped to another repo; 404 means the URL or the
+repo selection is wrong; 422 means the body is malformed.
+
+### When the token expires
+
+Runs simply stop being started, silently, and the schedule falls back to GitHub's 5-hour gaps. Put
+the expiry date in a calendar. The watchdog notices overdue cranks, but it runs on GitHub's scheduler
+too — so after 7 October either extend the token or retire the job deliberately.
+
 ## Moving to mainnet
 
 Not before the rehearsal ends on 7 October — and there is no rush after it. Mainnet

@@ -40,6 +40,10 @@ on:
     # runs mean six reverted transactions an hour for the length of the window. Still cheap
     # -- well under 0.1 FIL a quarter -- but no longer free.
     #
+    # This cron is the BACKSTOP, not the primary timer. GitHub delivered this repo's scheduled
+    # runs every 5-6 hours regardless of what it asked for. The primary timer is cron-job.org
+    # calling workflow_dispatch every 15 minutes -- see docs/RUNBOOK.md, "Reliable scheduling".
+    #
     # CALIBNET ONLY. When NETWORK moves to mainnet, change this to weekly -- see
     # docs/RUNBOOK.md "Moving to mainnet", step 5, and what weekly costs.
     - cron: '7,17,27,37,47,57 * * * *'
@@ -50,11 +54,6 @@ on:
         type: boolean
         required: false
         default: false
-      network:
-        description: 'Override NETWORK for this run. Blank uses the NETWORK repository variable.'
-        type: string
-        required: false
-        default: ''
       force_call:
         # For the rehearsal rows that expect a REVERTED message in the watchtower. The cranker
         # proper simulates first and never sends a call it knows will fail; this sends one named
@@ -110,7 +109,11 @@ jobs:
       - name: Crank
         env:
           # --- required ---
-          NETWORK: ${{ inputs.network || vars.NETWORK }}
+          # From the repository variable only. There used to be a per-run text override here; on
+          # 29 Sep a manual run had "Override" typed into it and failed with unknown NETWORK.
+          # It was never useful either -- RPC_URL stays on one network, so the chain-id guard
+          # rejects any other -- so it is gone. Change networks via the NETWORK variable.
+          NETWORK: ${{ vars.NETWORK }}
           RPC_URL: ${{ secrets.RPC_URL }}
           CRANKER_PRIVATE_KEY: ${{ secrets.CRANKER_PRIVATE_KEY }}
 
