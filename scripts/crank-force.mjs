@@ -23,7 +23,7 @@ import { Interface } from 'ethers';
 
 import sraAbi from '../abi/ServiceRewardsActor.json' with { type: 'json' };
 import swaAbi from '../abi/StreamWeightActor.json' with { type: 'json' };
-import { loadConfig, resolvePause } from '../src/config.mjs';
+import { loadConfig, redactRpcUrl, resolvePause } from '../src/config.mjs';
 import { connect, readBalance } from '../src/chain.mjs';
 import { classifyRevert } from '../src/errors.mjs';
 import { log, writeJobSummary } from '../src/logger.mjs';
@@ -168,6 +168,8 @@ function summary({ config, label, to, outcome, txHash = null, block = null, gasU
 try {
   await main();
 } catch (err) {
-  log.error('forced send failed before anything reached the chain', { error: err.message });
+  log.error('forced send failed before anything reached the chain', {
+    error: redactRpcUrl(err.message, process.env.RPC_URL),
+  });
   process.exitCode = 1;
 }

@@ -1,0 +1,169 @@
+[
+  {
+    "label": "lotus-notbound",
+    "threw": true,
+    "error": {
+      "code": "CALL_EXCEPTION",
+      "action": "call",
+      "data": "0x3461d1f00000000000000000000000000000000000000000000000000000000000000004",
+      "reason": null,
+      "transaction": {
+        "to": "0x66C11A9F6dfEC3c1557958cF9f575a023EB01421",
+        "data": "0x2dbab1b7",
+        "from": "0x170356558bd57623d3dF9877319014ec9de6E263"
+      },
+      "invocation": {
+        "method": "quarterlyGateCheck",
+        "signature": "quarterlyGateCheck()",
+        "args": []
+      },
+      "revert": null,
+      "shortMessage": "execution reverted (unknown custom error)"
+    }
+  },
+  {
+    "label": "lotus-estimategas-notbound",
+    "threw": true,
+    "error": {
+      "code": "CALL_EXCEPTION",
+      "action": "estimateGas",
+      "data": "0x3461d1f00000000000000000000000000000000000000000000000000000000000000004",
+      "reason": null,
+      "transaction": {
+        "to": "0x66C11A9F6dfEC3c1557958cF9f575a023EB01421",
+        "data": "0x2dbab1b7",
+        "from": "0x170356558bd57623d3dF9877319014ec9de6E263"
+      },
+      "invocation": null,
+      "revert": null,
+      "shortMessage": "execution reverted (unknown custom error)",
+      "info": {
+        "error": {
+          "code": 3,
+          "message": "message execution failed (exit=[33], revert reason=[0x3461d1f00000000000000000000000000000000000000000000000000000000000000004], vm error=[message failed with backtrace:\n00: f0200118 (method 3844450837) -- contract reverted at 121 (33)\n01: f0200118 (method 6) -- contract reverted at 1882 (33)\n02: f0200116 (method 3844450837) -- contract reverted at 121 (33)\n03: f0200116 (method 6) -- contract reverted at 1670 (33)\n (RetCode=33)])",
+          "data": "0x3461d1f00000000000000000000000000000000000000000000000000000000000000004"
+        }
+      }
+    }
+  },
+  {
+    "label": "http-429",
+    "threw": true,
+    "error": {
+      "code": "SERVER_ERROR",
+      "info": {
+        "requestUrl": "<url>",
+        "responseBody": "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32005,\"message\":\"rate limit exceeded\"}}",
+        "responseStatus": "599 CLIENT ESCALATED SERVER ERROR (429 Too Many Requests; exceeded maximum retry limit)"
+      },
+      "shortMessage": "exceeded maximum retry limit"
+    }
+  },
+  {
+    "label": "http-503",
+    "threw": true,
+    "error": {
+      "code": "SERVER_ERROR",
+      "info": {
+        "requestUrl": "<url>",
+        "responseBody": "Service Unavailable",
+        "responseStatus": "503 Service Unavailable"
+      },
+      "shortMessage": "server response 503 Service Unavailable"
+    }
+  },
+  {
+    "label": "empty-revert",
+    "threw": true,
+    "error": {
+      "code": "CALL_EXCEPTION",
+      "action": "call",
+      "data": "0x",
+      "reason": "require(false)",
+      "transaction": {
+        "to": "0x66C11A9F6dfEC3c1557958cF9f575a023EB01421",
+        "data": "0x2dbab1b7",
+        "from": "0x170356558bd57623d3dF9877319014ec9de6E263"
+      },
+      "invocation": {
+        "method": "quarterlyGateCheck",
+        "signature": "quarterlyGateCheck()",
+        "args": []
+      },
+      "revert": null,
+      "shortMessage": "execution reverted (no data present; likely require(false) occurred"
+    }
+  },
+  {
+    "label": "revert-no-data",
+    "threw": true,
+    "error": {
+      "code": "CALL_EXCEPTION",
+      "action": "call",
+      "data": null,
+      "reason": null,
+      "transaction": {
+        "to": "0x66C11A9F6dfEC3c1557958cF9f575a023EB01421",
+        "data": "0x2dbab1b7",
+        "from": "0x170356558bd57623d3dF9877319014ec9de6E263"
+      },
+      "invocation": null,
+      "revert": null,
+      "shortMessage": "missing revert data",
+      "info": {
+        "error": {
+          "code": 3,
+          "message": "execution reverted"
+        }
+      }
+    }
+  },
+  {
+    "label": "rpc-rate-limit-200",
+    "threw": true,
+    "error": {
+      "code": "CALL_EXCEPTION",
+      "action": "call",
+      "data": null,
+      "reason": null,
+      "transaction": {
+        "to": "0x66C11A9F6dfEC3c1557958cF9f575a023EB01421",
+        "data": "0x2dbab1b7",
+        "from": "0x170356558bd57623d3dF9877319014ec9de6E263"
+      },
+      "invocation": null,
+      "revert": null,
+      "shortMessage": "missing revert data",
+      "info": {
+        "error": {
+          "code": -32005,
+          "message": "rate limit exceeded, please retry later"
+        }
+      }
+    }
+  },
+  {
+    "label": "lotus-no-payload",
+    "threw": true,
+    "error": {
+      "code": "CALL_EXCEPTION",
+      "action": "call",
+      "data": null,
+      "reason": null,
+      "transaction": {
+        "to": "0x66C11A9F6dfEC3c1557958cF9f575a023EB01421",
+        "data": "0x2dbab1b7",
+        "from": "0x170356558bd57623d3dF9877319014ec9de6E263"
+      },
+      "invocation": null,
+      "revert": null,
+      "shortMessage": "missing revert data",
+      "info": {
+        "error": {
+          "code": 1,
+          "message": "message execution failed (exit=[7], vm error=[out of gas])"
+        }
+      }
+    }
+  }
+]

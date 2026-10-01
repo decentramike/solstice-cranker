@@ -169,7 +169,9 @@ export async function readSwaGateState(provider, swaAddress) {
  */
 export async function isQuarterBound(sra, q) {
   try {
-    await sra.aggregatedFilecoinPayVolume(q);
+    // The one chain read that went without retry. withRetry only repeats transport failures,
+    // so a NotBound revert still comes straight back below to be read as "not bound".
+    await withRetry(() => sra.aggregatedFilecoinPayVolume(q), { what: `aggregatedFilecoinPayVolume(${q})` });
     return true;
   } catch (err) {
     if (isTransportFailure(err)) throw err;

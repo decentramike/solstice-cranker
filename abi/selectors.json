@@ -1,8 +1,8 @@
 {
   "generatedFrom": {
     "repo": "https://github.com/filecoin-project/solstice.git",
-    "ref": "87fd57cda91f24dc3db3fd5695f4d4939befa452",
-    "vendoredAt": "2026-09-17T18:53:32.781Z"
+    "ref": "0006edced7402da3dd02eec1488016d3c9ea72ef",
+    "vendoredAt": "2026-10-01T22:43:41.048Z"
   },
   "errors": {
     "0x9996b315": "AddressEmptyCode(address)",
@@ -20,6 +20,7 @@
     "0x82f8edeb": "EVMActorNotFound(address)",
     "0xd6bda275": "FailedCall()",
     "0xbb1f322f": "HoldUntil(uint64)",
+    "0x358348ae": "InvalidActorId(uint64)",
     "0xf92ee8a9": "InvalidInitialization()",
     "0x613970e0": "InvalidParameter()",
     "0x56fed90f": "InvalidQuarter(uint64)",
@@ -34,6 +35,7 @@
     "0x245aecd3": "NotOwner(address)",
     "0x35f62d0b": "PairNotBound(bytes32)",
     "0xac4aca61": "PendingShares(uint64)",
+    "0xc4aaf932": "ReplaceAddressFailed(int256)",
     "0x34a0e580": "SetSharesFailed(int256)",
     "0xc8197dd8": "TaskNotFound(bytes32)",
     "0x2193c2d3": "TooManyPairs()",
@@ -42,6 +44,8 @@
     "0x8cebd98b": "ValueOutOfRange(int256)",
     "0x2033e238": "ZeroWallet()",
     "0x42d6f308": "CancelPendingFailed(int256)",
+    "0xebb58efd": "PendingGateParams(bytes32)",
+    "0x453dc930": "PendingWeightWrite(uint64)",
     "0x810cc44d": "RegisterStreamFailed(int256)",
     "0x36ce24c5": "RemoveStreamFailed(int256)",
     "0xf44a4bdf": "SetDistributionFailed(int256)",
@@ -108,7 +112,9 @@
     "0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b": "Upgraded(address)",
     "0x450fa92751c697ecee1e0a4c5f65bb3f1fa1b79706db3565c817cfc4b0b5a68b": "VolumeCorrected(uint64,address,uint256)",
     "0x4f506ba80e8746ec3024e2746924093398c388987387123c8896dc15e55e1c62": "VolumePosted(uint64,address,uint256)",
+    "0x3981d90ed4110dadd40632ff6415dd8f2f3568120c2ca01496b116d64309f7b2": "GateParamsSet(((uint256,uint256),uint64))",
     "0x17156bd1103c34b7346711dd050cf31e541c77de12379e2c8acd18480eb9c02d": "QuarterlyGateCheckResult(uint64,bool,uint64)",
+    "0x6ce00bec35f3118c93754419d462a3d5b7e7a4651d8c1acd553c07119dea193f": "WeightRecordsQueued((uint64,(int256,int256,uint64,int256,int256))[])",
     "0xd19248b615d8ec871fc4c28ef31cd762a9c474cf1dd9101b05cb54efd667ef61": "FvmActorCall(bytes)"
   }
 }
