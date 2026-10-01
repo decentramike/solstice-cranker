@@ -39,7 +39,7 @@ import { Contract, JsonRpcProvider, Wallet, formatEther } from 'ethers';
 
 import sraAbi from '../abi/ServiceRewardsActor.json' with { type: 'json' };
 import swaAbi from '../abi/StreamWeightActor.json' with { type: 'json' };
-import { loadConfig, resolvePause, NETWORKS } from '../src/config.mjs';
+import { loadConfig, redactRpcUrl, resolvePause, NETWORKS } from '../src/config.mjs';
 import { classifyRevert } from '../src/errors.mjs';
 import { log, persistRun, writeJobSummary } from '../src/logger.mjs';
 
@@ -261,6 +261,6 @@ function report({ config, now, q, actions, exitCode, balanceFil = null, cranker 
 try {
   await main();
 } catch (err) {
-  log.error('simple cranker aborted', { error: err.message });
+  log.error('simple cranker aborted', { error: redactRpcUrl(err.message, process.env.RPC_URL) });
   process.exitCode = 1;
 }
