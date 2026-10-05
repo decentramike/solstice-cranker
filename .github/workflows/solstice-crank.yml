@@ -131,8 +131,8 @@ jobs:
           # Blank = production. "rehearsal" sends only what config/rehearsal-schedule.json lists,
           # at its times, and refuses to start on any chain but calibnet.
           CRANK_MODE: ${{ vars.CRANK_MODE }}
-          # Blank = filecoin-project/solstice main's deployments.json, the source of the addresses
-          # rehearsal mode sends to.
+          # Blank = filecoin-project/solstice's deployments.json at the commit abi/ was built from:
+          # the source of the addresses rehearsal mode sends to.
           SOLSTICE_DEPLOYMENTS: ${{ vars.SOLSTICE_DEPLOYMENTS }}
 
           # --- behaviour ---

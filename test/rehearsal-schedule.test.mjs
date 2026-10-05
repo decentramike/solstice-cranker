@@ -61,7 +61,7 @@ describe('building the schedule from the runbook CSV', () => {
   });
 
   it('the window closes at Closes (UTC) plus the grace period', () => {
-    assert.equal(byId['80'].notAfter, '2026-10-06T00:40:00Z'); // closes 22:40 + 120 min
+    assert.equal(byId['80'].notAfter, '2026-10-05T23:10:00Z'); // closes 22:40 + 30 min: before step 78's hold ends
     assert.equal(buildScheduleFromCsv(CSV, { graceMinutes: 0 }).doc.entries.find((e) => e.id === '80').notAfter, '2026-10-05T22:40:00Z');
   });
 
@@ -92,6 +92,39 @@ describe('reading the Action prose', () => {
   it('an outcome belongs to the call it follows, not the one before', () => {
     const { calls } = parseActionCalls('SubmitShares(Q3), then QuarterlyGateCheck(Q3), revert StepsComplete()');
     assert.deepEqual(calls.map((c) => c.expect), ['pass', 'revert:StepsComplete']);
+  });
+
+  it('negation: "do not call", "must not revert", "no longer reverts"', () => {
+    const skipped = parseActionCalls('Nobody cranks: do not call QuarterlyGateCheck(Q5) this weekend');
+    assert.equal(skipped.calls.length, 0);
+    assert.match(skipped.warnings[0], /negated/);
+    assert.equal(parseActionCalls('QuarterlyGateCheck(Q7), PASS (must not revert)').calls[0].expect, 'pass');
+    assert.equal(parseActionCalls('QuarterlyGateCheck(Q7) no longer reverts, passes').calls[0].expect, 'pass');
+  });
+
+  it('"fails" and "Failed" mean fail for a gate check; both PASS and FAIL is flagged', () => {
+    assert.equal(parseActionCalls('QuarterlyGateCheck(Q6) fails, value bound 0').calls[0].expect, 'fail');
+    assert.equal(parseActionCalls('QuarterlyGateCheck(Q6), Failed').calls[0].expect, 'fail');
+    const both = parseActionCalls('QuarterlyGateCheck(Q6), passes now that the earlier one failed');
+    assert.match(both.calls[0].note, /both pass and fail/);
+  });
+
+  it('several error names in the Watchtower column: any revert, with a warning', () => {
+    const r = parseActionCalls('QuarterlyGateCheck(Q7), revert', 'StepWeightRecordsFailed(code) or HoldUntil(epoch)');
+    assert.equal(r.calls[0].expect, 'revert:*');
+    assert.match(r.calls[0].note, /names several/);
+  });
+
+  it('the outcome after an ignored mention still belongs to the call', () => {
+    const r = parseActionCalls('QuarterlyGateCheck(Q7), unlike QuarterlyGateCheck(Q5), revert StepsComplete()');
+    assert.equal(r.calls.length, 1);
+    assert.equal(r.calls[0].expect, 'revert:StepsComplete');
+  });
+
+  it('a Closes time before Opens is reported', () => {
+    const csv = 'Step,Qtr,Scenario,Actor,Action / command,Watchtower validation,Opens (UTC),Closes (UTC),Status\n' +
+      '1,Q1,x,Cranker,SubmitShares(Q1),,Mon 2026-10-05 10:00,Mon 2026-10-05 09:00,Pending\n';
+    assert.ok(buildScheduleFromCsv(csv).warnings.some((w) => /not after Opens/.test(w)));
   });
 
   it('accepts SubmitShares(6) and SubmitShares(Q6) alike', () => {

@@ -17,7 +17,7 @@
  *               quarter than the plan describes. null switches the check off for that entry.
  *   notBefore   ISO 8601 UTC. Never sent before this.
  *   notAfter    ISO 8601 UTC. Never sent at or after this: the row's Closes time plus a grace
- *               period. Without it, switching rehearsal mode on would replay last week's rows.
+ *               period (30 minutes by default). Without it, switching rehearsal mode on would replay last week's rows.
  *   expect      pass | fail | revert:<ErrorName> | revert:*
  *                 pass    the message lands (exit code 0); a gate check reports passed = true
  *                 fail    a gate check lands and reports passed = false (step 79's "FAIL")
@@ -44,6 +44,14 @@ export const CALLS = {
 export const ERROR_NAMES = [
   ...new Set([...sraAbi, ...swaAbi].filter((f) => f.type === 'error').map((f) => f.name)),
 ];
+
+/**
+ * How long after the row's Closes time a step may still be sent. Kept short on purpose: a step
+ * sent late can meet a different chain than the plan assumed. Step 80, for one, must revert while
+ * step 78's write is in its hold; sent after the hold ends it would pass instead, and use up the
+ * gate check meant for step 86. Thirty minutes covers two missed 15-minute triggers.
+ */
+export const DEFAULT_GRACE_MINUTES = 30;
 
 const DONE_STATUSES = /^(complete|completed|done|skipped|skip|n\/a|cancelled|canceled)$/i;
 
@@ -223,68 +231,111 @@ export function parseRunbookTime(text) {
 
 const CALL_RE = /\b(SubmitShares|QuarterlyGateCheck)\s*\(\s*Q?\s*(\d+)\s*\)/gi;
 
-/** Finds the first declared error name in `text`, as a whole word. */
-function firstErrorName(text) {
-  let best = null;
-  for (const name of ERROR_NAMES) {
-    const m = new RegExp(`\\b${name}\\b`).exec(text);
-    if (m && (best === null || m.index < best.index)) best = { name, index: m.index };
-  }
-  return best?.name ?? null;
+/** Every declared error name in `text`, as whole words, in order of first appearance. */
+function errorNamesIn(text) {
+  return ERROR_NAMES.map((name) => ({ name, m: new RegExp(`\\b${name}\\b`).exec(text) }))
+    .filter((x) => x.m)
+    .sort((a, b) => a.m.index - b.m.index)
+    .map((x) => x.name);
 }
+
+/** "not", "no longer", "never", "without", "must not" within a few words before position `at`. */
+const negatedAt = (text, at) => /\b(not|no longer|never|without|n't)\b[\s\w-]{0,20}$/i.test(text.slice(Math.max(0, at - 40), at));
 
 /**
  * Turns one runbook Action cell into the calls it sends.
  *
  * The cell is prose, e.g. "SubmitShares(Q8), then QuarterlyGateCheck(Q8), PASS, weight 40%".
- * Each call's own outcome is read from the text between it and the next call, so "revert" in
- * the second half of a row never attaches to the first. A second call counts only when "then"
- * introduces it; any other mention is reported for a person to look at, not sent.
+ * Each call's own outcome is read from the text between it and the next call it sends, so
+ * "revert" in the second half of a row never attaches to the first. A second call counts only
+ * when "then" introduces it, and no call counts when the text negates it ("do not call ...").
+ * Anything else is reported for a person to look at, not sent.
  */
 export function parseActionCalls(actionText, watchText = '') {
   const text = String(actionText ?? '');
-  const matches = [...text.matchAll(CALL_RE)];
-  const calls = [];
+  const watch = String(watchText ?? '');
+  const found = [...text.matchAll(CALL_RE)];
   const warnings = [];
 
-  matches.forEach((m, i) => {
-    const between = i === 0 ? '' : text.slice(matches[i - 1].index + matches[i - 1][0].length, m.index);
-    if (i > 0 && !/\bthen\b/i.test(between)) {
-      warnings.push(`"${m[0]}" is mentioned, not introduced with "then" -- not treated as a call to send`);
-      return;
+  // Which mentions are calls to send.
+  const accepted = [];
+  let lastEnd = 0;
+  for (const m of found) {
+    const before = text.slice(Math.max(0, m.index - 40), m.index);
+    if (/\b(do not|don't|never|must not|not|no longer|without)\s+(call|send|run|re-?run|retry)?\s*$/i.test(before)) {
+      warnings.push(`"${m[0]}" is negated ("${before.trim().slice(-30)}") -- not treated as a call to send`);
+      continue;
     }
-    const segmentEnd = i + 1 < matches.length ? matches[i + 1].index : text.length;
-    const segment = text.slice(m.index + m[0].length, segmentEnd);
+    if (accepted.length > 0 && !/\bthen\b/i.test(text.slice(lastEnd, m.index))) {
+      warnings.push(`"${m[0]}" is mentioned, not introduced with "then" -- not treated as a call to send`);
+      continue;
+    }
+    // "then re-run QuarterlyGateCheck(Q7) Tue 08:00" points at a later row, not a second call now.
+    const next = found[found.indexOf(m) + 1];
+    const after = text.slice(m.index + m[0].length, next ? next.index : text.length);
+    if (accepted.length > 0 && (/\b(re-?run|retry|later|tomorrow)\b/i.test(text.slice(lastEnd, m.index)) ||
+        /\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*\s+\d{1,2}:\d{2}\b|\b\d{4}-\d{2}-\d{2}\b/.test(after))) {
+      warnings.push(`"${m[0]}" points at another time ("${after.trim().slice(0, 30)}") -- a later row, not a call to send now`);
+      continue;
+    }
+    accepted.push(m);
+    lastEnd = m.index + m[0].length;
+  }
+
+  const calls = accepted.map((m, i) => {
+    const segment = text.slice(m.index + m[0].length, i + 1 < accepted.length ? accepted[i + 1].index : text.length);
     const fn = m[1].toLowerCase() === 'submitshares' ? 'submitShares' : 'quarterlyGateCheck';
     const q = Number(m[2]);
+    const notes = [];
+
+    const reverts = [...segment.matchAll(/\brevert(s|ed|ing)?\b/gi)];
+    const asserted = reverts.filter((r) => !negatedAt(segment, r.index));
+    if (reverts.length && !asserted.length) notes.push('"revert" appears only negated; not expecting a revert');
 
     let expect;
-    let note = null;
-    if (/\brevert(s|ed)?\b/i.test(segment)) {
-      const named = firstErrorName(segment);
-      expect = named ? `revert:${named}` : null;
-      if (!expect) {
-        const fromWatch = firstErrorName(String(watchText ?? ''));
-        expect = fromWatch ? `revert:${fromWatch}` : 'revert:*';
-        note = fromWatch
-          ? `revert name ${fromWatch} taken from the Watchtower validation column`
-          : 'revert without a named error: any revert matches';
+    if (asserted.length) {
+      const named = errorNamesIn(segment.slice(asserted[0].index));
+      const fromWatch = errorNamesIn(watch);
+      if (named.length === 1) {
+        expect = `revert:${named[0]}`;
+      } else if (named.length > 1) {
+        // "revert HoldUntil or StepWeightRecordsFailed, whichever f02 hits first": either is right.
+        expect = 'revert:*';
+        notes.push(`several error names (${named.join(', ')}): any revert matches -- check this row`);
+      } else if (fromWatch.length === 1) {
+        expect = `revert:${fromWatch[0]}`;
+        notes.push(`revert name ${fromWatch[0]} taken from the Watchtower validation column`);
+      } else {
+        expect = 'revert:*';
+        notes.push(fromWatch.length
+          ? `revert without a named error; the Watchtower column names several (${fromWatch.join(', ')}), so any revert matches`
+          : 'revert without a named error: any revert matches');
       }
-    } else if (/\bFAIL(ED)?\b/.test(segment)) {
+    } else if (/\bPASS(ED)?\b/.test(segment) !== /\bFAIL(S|ED)?\b/.test(segment)) {
+      // An explicit capitalised outcome, and only one of them, is the runbook's convention.
+      expect = /\bPASS(ED)?\b/.test(segment) ? 'pass' : 'fail';
+    } else if (/\bfail(s|ed)?\b/i.test(segment) && !/\bpass(es|ed)?\b/i.test(segment)) {
       expect = 'fail';
-    } else if (/\b(PASS(ED)?|success(ful)?|ok)\b/i.test(segment)) {
+    } else if (/\b(pass(es|ed)?|success(ful)?|ok)\b/i.test(segment) && !/\bfail(s|ed)?\b/i.test(segment)) {
       expect = 'pass';
+    } else if (/\bfail(s|ed)?\b/i.test(segment)) {
+      expect = 'pass';
+      notes.push('both pass and fail are mentioned; expecting pass -- check this row');
     } else {
       expect = 'pass';
-      note = 'no outcome stated: expecting the message to land';
+      notes.push('no outcome stated: expecting the message to land');
     }
-    calls.push({
+    if (expect === 'fail' && fn !== 'quarterlyGateCheck') {
+      expect = 'pass';
+      notes.push('"fail" on submitShares has no meaning (it has no pass/fail result); expecting it to land');
+    }
+    return {
       function: fn,
       args: fn === 'submitShares' ? [q] : [],
       gateQuarter: fn === 'quarterlyGateCheck' ? q : null,
       expect,
-      note,
-    });
+      note: notes.length ? notes.join('; ') : null,
+    };
   });
 
   return { calls, warnings };
@@ -301,7 +352,7 @@ function findColumn(header, ...names) {
  *
  * Reads only. Nothing here writes to the sheet; the caller writes the JSON file.
  */
-export function buildScheduleFromCsv(csvText, { graceMinutes = 120, source = {} } = {}) {
+export function buildScheduleFromCsv(csvText, { graceMinutes = DEFAULT_GRACE_MINUTES, source = {} } = {}) {
   const rows = parseCsv(csvText);
   if (rows.length < 2) throw new ScheduleError('the CSV has no data rows');
   const header = rows[0];
@@ -335,6 +386,8 @@ export function buildScheduleFromCsv(csvText, { graceMinutes = 120, source = {} 
     if (opens.warning) warnings.push(`${where}: ${opens.warning}`);
     const closes = col.closes >= 0 ? parseRunbookTime(r[col.closes]) : null;
     if (closes?.warning) warnings.push(`${where}: ${closes.warning}`);
+    if (closes && closes.ms <= opens.ms) warnings.push(`${where}: Closes (${r[col.closes]}) is not after Opens; using Opens + 15 min`);
+    if (!closes && col.closes >= 0 && String(r[col.closes] ?? '').trim()) warnings.push(`${where}: Closes "${r[col.closes]}" is not a time; using Opens + 15 min`);
     const closesMs = closes && closes.ms > opens.ms ? closes.ms : opens.ms + 15 * 60_000;
     const notAfter = new Date(closesMs + graceMinutes * 60_000).toISOString().replace('.000Z', 'Z');
 

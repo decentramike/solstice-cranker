@@ -21,7 +21,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { buildScheduleFromCsv, callLabel } from '../src/rehearsal/schedule.mjs';
+import { buildScheduleFromCsv, callLabel, DEFAULT_GRACE_MINUTES } from '../src/rehearsal/schedule.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -29,7 +29,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SCHEDULE_TAB_GID = '112555194';
 
 function args(argv) {
-  const out = { csv: null, sheet: process.env.RUNBOOK_SHEET_ID || null, gid: process.env.RUNBOOK_SHEET_GID || SCHEDULE_TAB_GID, out: join(ROOT, 'config', 'rehearsal-schedule.json'), grace: 120, check: false };
+  const out = { csv: null, sheet: process.env.RUNBOOK_SHEET_ID || null, gid: process.env.RUNBOOK_SHEET_GID || SCHEDULE_TAB_GID, out: join(ROOT, 'config', 'rehearsal-schedule.json'), grace: DEFAULT_GRACE_MINUTES, check: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {

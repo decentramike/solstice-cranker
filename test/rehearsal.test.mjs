@@ -57,10 +57,10 @@ class FakeChain {
   ts(n) {
     return GENESIS + n * 30;
   }
-  /** A transaction the cranker sent earlier, landed at `iso`. */
-  sentEarlier(iso, entryLike) {
+  /** A transaction the cranker sent earlier, landed at `iso`, with the outcome `result`. */
+  sentEarlier(iso, entryLike, result = { status: 1 }) {
     const n = epochOf(iso);
-    this.txs.push({ hash: `0xearly${this.txs.length}`, to: TARGETS[entryLike.contract], data: calldataFor(entryLike), blockNumber: n });
+    this.txs.push({ hash: `0xearly${this.txs.length}`, to: TARGETS[entryLike.contract], data: calldataFor(entryLike), blockNumber: n, result });
     this.txs.sort((a, b) => a.blockNumber - b.blockNumber);
   }
   async head() {
@@ -80,8 +80,20 @@ class FakeChain {
       .slice(this.hidden)
       .map((t, i) => ({ hash: t.hash, to: t.to, data: t.data, nonce: i, blockNumber: n, timestamp: this.ts(n) }));
   }
-  async gateState() {
-    return { next: this.gateNext, lastChecked: this.gateNext - 1, steps: 4, complete: false };
+  /** gateNext is the gate now; at an earlier block, undo the gate checks that landed after it. */
+  async gateState(swa, blockTag = 'latest') {
+    const later = blockTag === 'latest' ? 0 : this.txs.filter((t) => t.blockNumber > blockTag && t.result?.status === 1 && t.result?.gate).length;
+    const next = this.gateNext - later;
+    return { next, lastChecked: next - 1, steps: 4, complete: false };
+  }
+  async receiptOf(hash) {
+    const tx = this.txs.find((t) => t.hash === hash);
+    if (!tx) return null;
+    const r = tx.result ?? { status: 1 };
+    const logs = r.gate
+      ? [{ address: TARGETS.swa, ...SWA.encodeEventLog('QuarterlyGateCheckResult', [r.gate.quarter, r.gate.passed, r.gate.steps]) }]
+      : [];
+    return { hash, status: r.status, blockNumber: tx.blockNumber, gasUsed: 4_000_000n, logs };
   }
   async estimateGas(req) {
     this.estimates.push(req);
@@ -100,15 +112,11 @@ class FakeChain {
     return { hash: tx.hash, tx };
   }
   async wait(t) {
-    const r = t.tx.result;
-    const logs = r.gate
-      ? [{ address: TARGETS.swa, ...SWA.encodeEventLog('QuarterlyGateCheckResult', [r.gate.quarter, r.gate.passed, r.gate.steps]) }]
-      : [];
-    return { hash: t.hash, status: r.status, blockNumber: t.tx.blockNumber, gasUsed: 4_000_000n, logs };
+    return this.receiptOf(t.hash);
   }
   async revertData(req, receipt) {
     const tx = this.txs.find((t) => t.hash === receipt.hash);
-    return { data: tx.result.revert ?? null, source: 'fake', exitCode: 33 };
+    return { data: tx.result.revert ?? null, source: 'fake', exitCode: tx.result.exitCode ?? 33 };
   }
 }
 
@@ -451,5 +459,92 @@ describe('Lotus receipt return values', () => {
     assert.equal(cborBytesToHex(Buffer.concat([Buffer.from([0x58, long.length]), long]).toString('base64')), `0x${long.toString('hex')}`);
     assert.equal(cborBytesToHex(''), null);
     assert.equal(cborBytesToHex(Buffer.from([0x01]).toString('base64')), null, 'not a byte string');
+  });
+});
+
+describe('QA round 1: attribution, windows, outcomes', () => {
+  it('a held gate step never claims a later step\'s transaction (no double send)', async () => {
+    // The gate is already at Q7 when step 78 ("Q5") opens: 78 is held, 80 ("Q7") goes.
+    const s = schedule(
+      entry({ id: '78', gateQuarter: 5, notBefore: '2026-10-05T22:15:00Z', notAfter: '2026-10-05T23:00:00Z' }),
+      entry({ id: '80', gateQuarter: 7, notBefore: '2026-10-05T22:25:00Z', notAfter: '2026-10-05T23:10:00Z', expect: 'revert:StepWeightRecordsFailed' }),
+    );
+    const chain = new FakeChain({ at: '2026-10-05T22:26:00Z', gateNext: 7, respond: () => ({ status: 0, revert: revertWith('StepWeightRecordsFailed', [16]) }) });
+    const r1 = await run(chain, s, { now: '2026-10-05T22:26:00Z' });
+    assert.deepEqual(r1.actions.map((a) => [a.id, a.decision]), [['78', 'blocked'], ['80', 'sent']]);
+    chain.headNumber = epochOf('2026-10-05T22:41:00Z');
+    const r2 = await run(chain, s, { now: '2026-10-05T22:41:00Z' });
+    assert.deepEqual(r2.actions.map((a) => [a.id, a.decision]), [['78', 'blocked'], ['80', 'already-sent']]);
+    assert.equal(chain.sends.length, 1, 'step 80 was sent twice');
+  });
+
+  it('a row marked Complete owns its transaction: step 31 is not credited with step 30\'s send', async () => {
+    const e30 = entry({ id: '30.1', function: 'submitShares', args: [3], notBefore: '2026-10-06T19:00:00Z', notAfter: '2026-10-06T19:45:00Z', status: 'Complete' });
+    const e31 = entry({ id: '31', function: 'submitShares', args: [3], notBefore: '2026-10-06T19:15:00Z', notAfter: '2026-10-06T20:00:00Z', expect: 'revert:AlreadySubmitted' });
+    const s = schedule(e30, e31);
+    const chain = new FakeChain({ at: '2026-10-06T19:20:00Z', respond: () => ({ status: 0, revert: revertWith('AlreadySubmitted', [3]) }) });
+    chain.sentEarlier('2026-10-06T19:16:00Z', s.entries[0]); // sent late, inside step 31's window
+    const r = await run(chain, s, { now: '2026-10-06T19:20:00Z' });
+    assert.deepEqual(r.actions.map((a) => [a.id, a.decision, a.match]), [['31', 'sent', true]]);
+  });
+
+  it('out of gas is not the revert a row was testing', async () => {
+    const chain = new FakeChain({ at: '2026-10-05T22:26:00Z', respond: () => ({ status: 0, exitCode: 7 }) });
+    const r = await run(chain, schedule(entry({ id: '73', expect: 'revert:*' })), { now: '2026-10-05T22:26:00Z' });
+    assert.equal(r.actions[0].match, false);
+    assert.equal(r.actions[0].result, 'failed on chain, exit code 7');
+  });
+
+  it('no send starts within a minute of notAfter, by either clock', async () => {
+    const chain = new FakeChain({ at: '2026-10-06T00:39:00Z', respond: gatePass(7) });
+    const r = await run(chain, schedule(entry({ id: '80' })), { now: '2026-10-06T00:39:30Z' });
+    assert.equal(chain.sends.length, 0);
+    assert.equal(r.actions[0].decision, 'too-late');
+    const ahead = new FakeChain({ at: '2026-10-06T00:39:30Z', respond: gatePass(7) }); // head ahead of the runner
+    await run(ahead, schedule(entry({ id: '80' })), { now: '2026-10-06T00:38:45Z' });
+    assert.equal(ahead.sends.length, 0);
+  });
+
+  it('a gate check that tested a different quarter is not a match, even if it passed', async () => {
+    const chain = new FakeChain({ at: '2026-10-06T08:01:00Z', gateNext: 7, respond: () => ({ status: 1, gate: { quarter: 8, passed: true, steps: 5 } }) });
+    const r = await run(chain, schedule(entry({ id: '86', gateQuarter: 7, notBefore: '2026-10-06T08:00:00Z', notAfter: '2026-10-06T08:45:00Z' })), { now: '2026-10-06T08:01:00Z' });
+    assert.equal(r.actions[0].match, false);
+  });
+
+  it('a dry run pages nobody, and pictures the gate advancing through the passes it would send', async () => {
+    const s = schedule(
+      entry({ id: '78', gateQuarter: 5, notBefore: '2026-10-05T22:15:00Z' }),
+      entry({ id: '79', gateQuarter: 6, notBefore: '2026-10-05T22:20:00Z', expect: 'fail' }),
+      entry({ id: '80', gateQuarter: 7, notBefore: '2026-10-05T22:25:00Z', expect: 'revert:StepWeightRecordsFailed' }),
+    );
+    const chain = new FakeChain({ at: '2026-10-05T22:26:00Z', gateNext: 5 });
+    const r = await run(chain, s, { now: '2026-10-05T22:26:00Z', dryRun: true });
+    assert.deepEqual(r.actions.map((a) => a.decision), ['dry-run', 'dry-run', 'dry-run']);
+    const blocked = await run(new FakeChain({ at: '2026-10-05T22:26:00Z', gateNext: 7 }), s, { now: '2026-10-05T22:26:00Z', dryRun: true });
+    assert.deepEqual(blocked.actions.map((a) => a.decision), ['blocked', 'blocked', 'dry-run']);
+    assert.deepEqual(blocked.alerts.alerts, []);
+    assert.equal(blocked.exitCode, 0);
+  });
+
+  it('a step found already sent is still checked against the plan', async () => {
+    const e = entry({ id: '80', gateQuarter: 7, expect: 'revert:StepWeightRecordsFailed' });
+    const s = schedule(e);
+    const chain = new FakeChain({ at: '2026-10-05T22:40:00Z', gateNext: 7 });
+    chain.sentEarlier('2026-10-05T22:26:00Z', s.entries[0], { status: 0, revert: revertWith('StepsComplete') }); // the run that sent it crashed
+    const r = await run(chain, s, { now: '2026-10-05T22:40:00Z' });
+    assert.equal(r.actions[0].decision, 'already-sent');
+    assert.equal(r.actions[0].result, 'reverted StepsComplete()');
+    assert.equal(r.actions[0].match, false);
+    assert.equal(chain.sends.length, 0);
+  });
+
+  it('a stuck cranker transaction is alerted once it has held a step for a report window', async () => {
+    const chain = new FakeChain({ at: '2026-10-05T22:46:00Z', respond: gatePass(7) });
+    chain.pendingExtra = 1;
+    const early = await run(chain, schedule(entry({ id: '80' })), { now: '2026-10-05T22:26:00Z' });
+    assert.equal(early.exitCode, 0);
+    const later = await run(chain, schedule(entry({ id: '80' })), { now: '2026-10-05T22:46:00Z' });
+    assert.equal(later.exitCode, 1);
+    assert.match(later.alerts.alerts[0].title, /stuck/);
   });
 });

@@ -3,16 +3,26 @@
  *
  * Not from config/networks.json and not from a repository variable: the upstream file is the
  * record of what was deployed, and a copy kept here is one more place for an address to go stale.
- * SOLSTICE_DEPLOYMENTS points somewhere else -- another ref's raw URL, or a local file (the tests
- * use one for their mock contracts).
+ *
+ * Read at the same upstream commit the ABI was built from (abi/selectors.json), not at main: the
+ * addresses and the ABI then always describe the same deployment, and an upstream edit reaches
+ * the cranker only through a reviewed change here (moving REF in devnet/prepare-contracts.mjs and
+ * rebuilding abi/). SOLSTICE_DEPLOYMENTS points somewhere else -- another ref's raw URL, or a
+ * local file (the tests use one for their mock contracts).
  */
 import { readFileSync } from 'node:fs';
 import { getAddress, isAddress } from 'ethers';
 
+import selectors from '../../abi/selectors.json' with { type: 'json' };
 import { ZERO_ADDRESS } from '../config.mjs';
 
+const PINNED_REF = selectors.generatedFrom?.ref;
+if (!/^[0-9a-f]{40}$/.test(PINNED_REF ?? '')) {
+  throw new Error('abi/selectors.json does not record the upstream commit it was built from');
+}
+
 export const DEFAULT_DEPLOYMENTS =
-  'https://raw.githubusercontent.com/filecoin-project/solstice/main/deployments.json';
+  `https://raw.githubusercontent.com/filecoin-project/solstice/${PINNED_REF}/deployments.json`;
 
 export class DeploymentsError extends Error {
   constructor(message) {

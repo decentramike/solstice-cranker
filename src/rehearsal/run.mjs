@@ -53,14 +53,16 @@ export async function runRehearsalFromEnv(config, { now = () => Date.now() } = {
   if (!address) log.warn('no CRANKER_PRIVATE_KEY: cannot check what this wallet already sent; showing the plan only');
 
   const alerts = new AlertSink(config);
-  const chain = ethersChain({ provider, wallet, address });
+  const chain = ethersChain({ provider, wallet, address, epochSeconds: config.epochSeconds });
+  const dryRun = config.dryRun || !address;
   const result = await runRehearsal({
     schedule,
     targets,
     chain,
     cranker: address,
     nowMs: now(),
-    dryRun: config.dryRun || !address,
+    clock: now,
+    dryRun,
     pause,
     gasLimit: config.rehearsal.gasLimit,
     reportWindowMs: config.rehearsal.reportWindowMinutes * 60_000,
@@ -94,7 +96,7 @@ export async function runRehearsalFromEnv(config, { now = () => Date.now() } = {
     chainTime: result.chainTime,
     cranker: address,
     balanceFil,
-    dryRun: config.dryRun,
+    dryRun,
     paused: pause.paused,
     pauseReason: pause.reason,
     schedule: { file: config.rehearsal.scheduleFile, entries: schedule.entries.length, crankerRowsSha256: schedule.source?.crankerRowsSha256 ?? null },

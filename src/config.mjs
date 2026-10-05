@@ -236,16 +236,22 @@ export function loadConfig(rawEnv = process.env, { requireKey = true } = {}) {
   if (!['production', 'rehearsal'].includes(mode)) {
     throw new ConfigError(`CRANK_MODE "${env.CRANK_MODE}" is not production or rehearsal`);
   }
-  let rehearsalGasLimit;
-  try {
-    rehearsalGasLimit = BigInt(env.CRANK_REHEARSAL_GAS_LIMIT ?? 100_000_000);
-  } catch {
-    throw new ConfigError(`CRANK_REHEARSAL_GAS_LIMIT is not an integer: ${env.CRANK_REHEARSAL_GAS_LIMIT}`);
-  }
-  if (rehearsalGasLimit < 21_000n) throw new ConfigError('CRANK_REHEARSAL_GAS_LIMIT must be at least 21000');
-  const reportWindowMinutes = Number(env.CRANK_REHEARSAL_REPORT_MINUTES ?? 20);
-  if (!Number.isFinite(reportWindowMinutes) || reportWindowMinutes < 1) {
-    throw new ConfigError('CRANK_REHEARSAL_REPORT_MINUTES must be a positive number');
+  // Checked only when they are used: a typo in a rehearsal-only variable must not stop production.
+  let rehearsalGasLimit = 100_000_000n;
+  let reportWindowMinutes = 15;
+  if (mode === 'rehearsal') {
+    try {
+      rehearsalGasLimit = BigInt(env.CRANK_REHEARSAL_GAS_LIMIT ?? 100_000_000);
+    } catch {
+      throw new ConfigError(`CRANK_REHEARSAL_GAS_LIMIT is not an integer: ${env.CRANK_REHEARSAL_GAS_LIMIT}`);
+    }
+    if (rehearsalGasLimit < 21_000n) throw new ConfigError('CRANK_REHEARSAL_GAS_LIMIT must be at least 21000');
+    // A problem is alerted on runs inside this window, so set it to the trigger interval and each
+    // one is alerted about once. 15 matches the cron-job.org trigger.
+    reportWindowMinutes = Number(env.CRANK_REHEARSAL_REPORT_MINUTES ?? 15);
+    if (!Number.isFinite(reportWindowMinutes) || reportWindowMinutes < 1) {
+      throw new ConfigError('CRANK_REHEARSAL_REPORT_MINUTES must be a positive number');
+    }
   }
 
   const maxGateCatchup = Number(env.CRANK_MAX_GATE_CATCHUP ?? 8);

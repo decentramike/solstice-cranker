@@ -8,7 +8,7 @@
   "chainId": 314159,
   "source": {
     "crankerRowsSha256": "1de2bdbc309c61f0bc6193bfc2614f895cbd70245d445bbcf116f04885f31fe0",
-    "graceMinutes": 120
+    "graceMinutes": 30
   },
   "entries": [
     {
@@ -20,7 +20,7 @@
       ],
       "gateQuarter": null,
       "notBefore": "2026-09-29T19:00:00Z",
-      "notAfter": "2026-09-29T21:15:00Z",
+      "notAfter": "2026-09-29T19:45:00Z",
       "expect": "pass",
       "status": "Complete",
       "source": "Read aggregatedFilecoinPayVolume(Q1), bound value; then SubmitShares(Q1), success; then QuarterlyGateCheck(Q1), revert NotBound(2) because the check reads quarter 2, which is not yet bound. Q1 is the bootstrap quarter and has no gate."
@@ -32,7 +32,7 @@
       "args": [],
       "gateQuarter": 1,
       "notBefore": "2026-09-29T19:00:00Z",
-      "notAfter": "2026-09-29T21:15:00Z",
+      "notAfter": "2026-09-29T19:45:00Z",
       "expect": "revert:NotBound",
       "status": "Complete",
       "source": "Read aggregatedFilecoinPayVolume(Q1), bound value; then SubmitShares(Q1), success; then QuarterlyGateCheck(Q1), revert NotBound(2) because the check reads quarter 2, which is not yet bound. Q1 is the bootstrap quarter and has no gate."
@@ -46,7 +46,7 @@
       ],
       "gateQuarter": null,
       "notBefore": "2026-09-30T19:00:00Z",
-      "notAfter": "2026-09-30T21:15:00Z",
+      "notAfter": "2026-09-30T19:45:00Z",
       "expect": "pass",
       "status": "Complete",
       "source": "SubmitShares(Q2), then QuarterlyGateCheck(Q2), PASS, weight 15%"
@@ -58,7 +58,7 @@
       "args": [],
       "gateQuarter": 2,
       "notBefore": "2026-09-30T19:00:00Z",
-      "notAfter": "2026-09-30T21:15:00Z",
+      "notAfter": "2026-09-30T19:45:00Z",
       "expect": "pass",
       "status": "Complete",
       "source": "SubmitShares(Q2), then QuarterlyGateCheck(Q2), PASS, weight 15%"
@@ -72,7 +72,7 @@
       ],
       "gateQuarter": null,
       "notBefore": "2026-10-01T19:00:00Z",
-      "notAfter": "2026-10-01T21:15:00Z",
+      "notAfter": "2026-10-01T19:45:00Z",
       "expect": "pass",
       "status": "Complete",
       "source": "SubmitShares(Q3), then QuarterlyGateCheck(Q3), PASS, weight 20%"
@@ -84,7 +84,7 @@
       "args": [],
       "gateQuarter": 3,
       "notBefore": "2026-10-01T19:00:00Z",
-      "notAfter": "2026-10-01T21:15:00Z",
+      "notAfter": "2026-10-01T19:45:00Z",
       "expect": "pass",
       "status": "Complete",
       "source": "SubmitShares(Q3), then QuarterlyGateCheck(Q3), PASS, weight 20%"
@@ -98,7 +98,7 @@
       ],
       "gateQuarter": null,
       "notBefore": "2026-10-01T19:15:00Z",
-      "notAfter": "2026-10-01T21:30:00Z",
+      "notAfter": "2026-10-01T20:00:00Z",
       "expect": "revert:*",
       "status": "Pending",
       "source": "SubmitShares(Q3) again, revert"
@@ -112,7 +112,7 @@
       ],
       "gateQuarter": null,
       "notBefore": "2026-10-02T19:00:00Z",
-      "notAfter": "2026-10-02T21:15:00Z",
+      "notAfter": "2026-10-02T19:45:00Z",
       "expect": "pass",
       "status": "Complete",
       "source": "SubmitShares(Q4), then QuarterlyGateCheck(Q4), PASS, weight 25%"
@@ -124,7 +124,7 @@
       "args": [],
       "gateQuarter": 4,
       "notBefore": "2026-10-02T19:00:00Z",
-      "notAfter": "2026-10-02T21:15:00Z",
+      "notAfter": "2026-10-02T19:45:00Z",
       "expect": "pass",
       "status": "Complete",
       "source": "SubmitShares(Q4), then QuarterlyGateCheck(Q4), PASS, weight 25%"
@@ -138,7 +138,7 @@
       ],
       "gateQuarter": null,
       "notBefore": "2026-10-05T13:30:00Z",
-      "notAfter": "2026-10-05T15:45:00Z",
+      "notAfter": "2026-10-05T14:15:00Z",
       "expect": "pass",
       "status": "Pending",
       "source": "SubmitShares(6): quarter 6 has no data, the SRA only counts it as submitted; Q5 is superseded"
@@ -150,7 +150,7 @@
       "args": [],
       "gateQuarter": 5,
       "notBefore": "2026-10-05T13:45:00Z",
-      "notAfter": "2026-10-05T16:00:00Z",
+      "notAfter": "2026-10-05T14:30:00Z",
       "expect": "revert:*",
       "status": "Pending",
       "source": "QuarterlyGateCheck(Q5), revert, the temporary stream leaves no headroom"
@@ -164,7 +164,7 @@
       ],
       "gateQuarter": null,
       "notBefore": "2026-10-05T19:00:00Z",
-      "notAfter": "2026-10-05T21:15:00Z",
+      "notAfter": "2026-10-05T19:45:00Z",
       "expect": "pass",
       "status": "Pending",
       "source": "SubmitShares(Q7)"
@@ -176,7 +176,7 @@
       "args": [],
       "gateQuarter": 5,
       "notBefore": "2026-10-05T22:15:00Z",
-      "notAfter": "2026-10-06T00:30:00Z",
+      "notAfter": "2026-10-05T23:00:00Z",
       "expect": "pass",
       "status": "Pending",
       "source": "QuarterlyGateCheck(Q5) re-attempt, stream now removed, PASS, weight 30%"
@@ -188,7 +188,7 @@
       "args": [],
       "gateQuarter": 6,
       "notBefore": "2026-10-05T22:20:00Z",
-      "notAfter": "2026-10-06T00:35:00Z",
+      "notAfter": "2026-10-05T23:05:00Z",
       "expect": "fail",
       "status": "Pending",
       "source": "QuarterlyGateCheck(Q6), FAIL, value bound 0, weight holds at 30%"
@@ -200,7 +200,7 @@
       "args": [],
       "gateQuarter": 7,
       "notBefore": "2026-10-05T22:25:00Z",
-      "notAfter": "2026-10-06T00:40:00Z",
+      "notAfter": "2026-10-05T23:10:00Z",
       "expect": "revert:StepWeightRecordsFailed",
       "status": "Pending",
       "source": "QuarterlyGateCheck(Q7), revert, the Q5 step is still in its 6 h hold (re-run Tue 08:00)"
@@ -212,7 +212,7 @@
       "args": [],
       "gateQuarter": 7,
       "notBefore": "2026-10-06T08:00:00Z",
-      "notAfter": "2026-10-06T10:15:00Z",
+      "notAfter": "2026-10-06T08:45:00Z",
       "expect": "pass",
       "status": "Pending",
       "source": "QuarterlyGateCheck(Q7), PASS, weight 35%"
@@ -226,7 +226,7 @@
       ],
       "gateQuarter": null,
       "notBefore": "2026-10-06T19:00:00Z",
-      "notAfter": "2026-10-06T21:15:00Z",
+      "notAfter": "2026-10-06T19:45:00Z",
       "expect": "pass",
       "status": "Pending",
       "source": "SubmitShares(Q8), then QuarterlyGateCheck(Q8), PASS, weight 40%"
@@ -238,7 +238,7 @@
       "args": [],
       "gateQuarter": 8,
       "notBefore": "2026-10-06T19:00:00Z",
-      "notAfter": "2026-10-06T21:15:00Z",
+      "notAfter": "2026-10-06T19:45:00Z",
       "expect": "pass",
       "status": "Pending",
       "source": "SubmitShares(Q8), then QuarterlyGateCheck(Q8), PASS, weight 40%"
@@ -252,7 +252,7 @@
       ],
       "gateQuarter": null,
       "notBefore": "2026-10-07T19:00:00Z",
-      "notAfter": "2026-10-07T21:15:00Z",
+      "notAfter": "2026-10-07T19:45:00Z",
       "expect": "pass",
       "status": "Pending",
       "source": "SubmitShares(Q9), then QuarterlyGateCheck(Q9), PASS, weight 45%"
@@ -264,7 +264,7 @@
       "args": [],
       "gateQuarter": 9,
       "notBefore": "2026-10-07T19:00:00Z",
-      "notAfter": "2026-10-07T21:15:00Z",
+      "notAfter": "2026-10-07T19:45:00Z",
       "expect": "pass",
       "status": "Pending",
       "source": "SubmitShares(Q9), then QuarterlyGateCheck(Q9), PASS, weight 45%"
@@ -278,7 +278,7 @@
       ],
       "gateQuarter": null,
       "notBefore": "2026-10-08T19:00:00Z",
-      "notAfter": "2026-10-08T21:15:00Z",
+      "notAfter": "2026-10-08T19:45:00Z",
       "expect": "pass",
       "status": "Pending",
       "source": "SubmitShares(Q10), then QuarterlyGateCheck(Q10), PASS, weight 50% (cap)"
@@ -290,7 +290,7 @@
       "args": [],
       "gateQuarter": 10,
       "notBefore": "2026-10-08T19:00:00Z",
-      "notAfter": "2026-10-08T21:15:00Z",
+      "notAfter": "2026-10-08T19:45:00Z",
       "expect": "pass",
       "status": "Pending",
       "source": "SubmitShares(Q10), then QuarterlyGateCheck(Q10), PASS, weight 50% (cap)"
@@ -304,7 +304,7 @@
       ],
       "gateQuarter": null,
       "notBefore": "2026-10-09T19:00:00Z",
-      "notAfter": "2026-10-09T21:15:00Z",
+      "notAfter": "2026-10-09T19:45:00Z",
       "expect": "pass",
       "status": "Pending",
       "source": "SubmitShares(Q11), the map holds only the two faucets; the service stream stops burning and accrues in f02 to the faucet wallets"
@@ -316,7 +316,7 @@
       "args": [],
       "gateQuarter": 11,
       "notBefore": "2026-10-09T19:15:00Z",
-      "notAfter": "2026-10-09T21:30:00Z",
+      "notAfter": "2026-10-09T20:00:00Z",
       "expect": "revert:StepsComplete",
       "status": "Pending",
       "source": "QuarterlyGateCheck(Q11), revert StepsComplete(), the 8 steps are taken; the volume is not read"

@@ -258,12 +258,19 @@ Rehearsal mode turns the decision over to the runbook's Schedule tab:
 - **Never early.** An entry goes out on the first run at or after its `notBefore` (the row's
   Opens time), judged by the runner's clock *and* the chain head's timestamp. So a 19:00
   `submitShares` cannot land before 19:00's binding epoch is on chain.
-- **Never late without a person.** After `notAfter` (the row's Closes time plus 120 minutes) it
-  is not sent at all, and the first run after that alerts that it was missed.
+- **Never late without a person.** No send starts within a minute of `notAfter` (the row's
+  Closes time plus 30 minutes), by either clock. After that the step is not sent at all, and the
+  run after the window closes alerts that it was missed. The grace is short on purpose: a step
+  sent late can meet a different chain than the plan assumed. Step 80, for example, must revert
+  while step 78's write is in its hold. Sent after the hold ends, it would pass instead and use up
+  the gate check meant for step 86.
 - **At most once.** Before sending, the run reads the cranker's own nonce history to find every
-  transaction it sent since the entry opened, and matches them to entries by target and
-  calldata. Nothing is stored between runs. That includes a manual `force_call` sent inside the
-  window, which counts as the step.
+  transaction it sent since the window opened, and credits each to an entry by target and
+  calldata. Nothing is stored between runs. `quarterlyGateCheck()` has no argument, so a gate
+  check is credited by the quarter it actually tested: its `QuarterlyGateCheckResult` event, or
+  the gate's state at the block before it. A manual `force_call` sent inside the window counts as
+  the step. Rows marked Complete keep their own transactions. A step found already sent is still
+  checked against `expect`, and the result goes in the run record.
 - **Expected reverts are sent.** For `expect: revert:…` there is no `eth_call` or
   `eth_estimateGas` pre-check. It sends with an explicit gas limit (100,000,000), the message
   lands on chain with a non-zero exit code, and the run decodes the revert from the Lotus
@@ -274,7 +281,9 @@ Rehearsal mode turns the decision over to the runbook's Schedule tab:
 - **Calibnet only.** It refuses to start unless both `NETWORK` and the RPC endpoint are chain
   314159.
 - **Addresses from upstream.** The SRA and SWA addresses come from `filecoin-project/solstice`'s
-  `deployments.json` (override with the `SOLSTICE_DEPLOYMENTS` variable), not from this repo.
+  `deployments.json`, at the commit `abi/` was built from. Moving `REF` in
+  `devnet/prepare-contracts.mjs` and rebuilding moves both together. The `SOLSTICE_DEPLOYMENTS`
+  variable overrides the source.
 
 Every action is one log line:
 
@@ -291,8 +300,8 @@ info rehearsal step=80 fn=quarterlyGateCheck() tx=0x… epoch=4130420 decision=s
 | `CRANK_MODE` | `rehearsal` to follow the schedule. Delete it (or set `production`) to go back. |
 | `SOLSTICE_DEPLOYMENTS` | Leave unset. Set it to another `deployments.json` URL only to test a different deployment. |
 
-Check what it will do before switching it on. This prints the next 24 hours of sends and needs no
-key and no node:
+Check what it will do before switching it on. This prints every step open in the next 24 hours
+(`WOULD SEND`, `OPEN NOW`, `CLOSED`) and needs no key and no node:
 
 ```bash
 npm run rehearsal:plan
@@ -303,7 +312,12 @@ chain, sends nothing, and shows every step it would send in the job summary.
 
 The trigger runs every 15 minutes, so a step can go out up to about 16 minutes after its Opens
 time. To land within a couple of minutes, set the cron-job.org job to every 5 minutes for the
-rehearsal week. A run with nothing open costs a handful of RPC reads.
+rehearsal week, and set `CRANK_REHEARSAL_REPORT_MINUTES` to `5` to match. A run with nothing open
+costs a handful of RPC reads.
+
+Alerts carry no state between runs either. A problem is alerted on the runs inside
+`CRANK_REHEARSAL_REPORT_MINUTES` (default 15) of the moment it starts. Keep that setting equal to
+the trigger interval, and each problem is alerted about once. A dry run never alerts.
 
 ### Updating the schedule when the runbook changes
 

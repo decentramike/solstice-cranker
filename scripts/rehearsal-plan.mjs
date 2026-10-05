@@ -8,9 +8,14 @@
  *   npm run rehearsal:plan -- --from 2026-10-06T00:00:00Z --to 2026-10-10T00:00:00Z
  *   npm run rehearsal:plan -- --offline                       # skip fetching deployments.json
  *
- * "Would send" here means: in rehearsal mode, the first run at or after notBefore sends this,
- * unless the step was already sent, the cranker is paused, or (gate checks) the SWA is not at the
- * quarter the row names. The live decision is made per run, against the chain.
+ * Lists every step whose window overlaps the range, including ones already open. Labels:
+ *   WOULD SEND   opens later; the first run at or after its time sends it
+ *   OPEN NOW     its window is open; the next run sends it unless it was already sent
+ *   CLOSED       its window has closed; it will not be sent
+ *   skip         the runbook marks it done
+ * Any of them can still be held at run time: when paused, when it was already sent, or (gate
+ * checks) when the SWA is not at the quarter the row names. Only a real run, against the chain,
+ * decides that -- `Run workflow` with dry_run shows it.
  */
 import { DEFAULT_DEPLOYMENTS, loadDeployments } from '../src/rehearsal/deployments.mjs';
 import { DEFAULT_REHEARSAL_GAS_LIMIT } from '../src/rehearsal/engine.mjs';
@@ -58,10 +63,18 @@ async function main() {
     targets = await loadDeployments(process.env.SOLSTICE_DEPLOYMENTS || DEFAULT_DEPLOYMENTS, REHEARSAL_CHAIN_ID);
   }
 
+  const now = Date.now();
   const rows = schedule.entries
-    .filter((e) => e.notBeforeMs >= opts.fromMs && e.notBeforeMs < opts.toMs)
+    .filter((e) => e.notBeforeMs < opts.toMs && e.notAfterMs > opts.fromMs)
     .map((e) => {
       const revert = e.expectParsed.kind === 'revert';
+      const decision = e.done
+        ? `skip: runbook status "${e.status}"`
+        : e.notAfterMs <= now
+          ? 'CLOSED'
+          : e.notBeforeMs <= now
+            ? 'OPEN NOW'
+            : 'WOULD SEND';
       return {
         when: fmt(e.notBeforeMs),
         notBefore: e.notBefore,
@@ -74,7 +87,7 @@ async function main() {
         precheck: revert ? 'none (expected revert)' : 'estimateGas x1.4',
         gas: revert ? String(gas) : 'estimate x1.4',
         condition: e.gateQuarter === null ? '' : `SWA next quarter = Q${e.gateQuarter}`,
-        decision: e.done ? `skip: runbook status "${e.status}"` : 'WOULD SEND',
+        decision,
       };
     });
 
