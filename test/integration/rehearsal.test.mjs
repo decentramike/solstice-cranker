@@ -18,6 +18,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ContractFactory, HDNodeWallet, JsonRpcProvider, Mnemonic } from 'ethers';
 
+import { tagGasLimit } from '../../src/rehearsal/engine.mjs';
+
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const CHAIN_DIR = join(ROOT, 'test', 'rehearsal-chain');
 const CONFIG = join(CHAIN_DIR, 'hardhat.config.cjs');
@@ -181,7 +183,7 @@ describe('rehearsal mode against a local chain with calibnet\'s chain id', { ski
     assert.equal(receipt.status, 0, 'the revert is on chain');
     assert.equal(a.epoch, receipt.blockNumber);
     const tx = await provider.getTransaction(a.txHash);
-    assert.equal(tx.gasLimit, 5_000_000n, 'the explicit limit, not an estimate');
+    assert.equal(tx.gasLimit, tagGasLimit(5_000_000n, a.id), 'the explicit limit, not an estimate, its last digits naming the step');
     assert.match(r.stderr, new RegExp(`rehearsal step=${a.id} fn=quarterlyGateCheck\\(\\) tx=${a.txHash} epoch=${a.epoch} decision=sent result="reverted StepWeightRecordsFailed\\(16\\)" expect=revert:StepWeightRecordsFailed match=yes`));
 
     // ...and a second run in the same window does not send it again.

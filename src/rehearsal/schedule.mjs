@@ -216,11 +216,19 @@ export function parseCsv(text) {
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-/** "Mon 2026-10-05 22:25" -> "2026-10-05T22:25:00Z". Returns {iso, warning} or null. */
+/**
+ * "Mon 2026-10-05 22:25" -> "2026-10-05T22:25:00Z". Returns {iso, ms, warning}, or null when there
+ * is no date and time. Throws on anything after the time but "UTC": "7:00 PM" would otherwise be
+ * read as 07:00 -- twelve hours early -- and "19:00 CEST" two hours late.
+ */
 export function parseRunbookTime(text) {
-  const m = String(text ?? '').match(/(?:\b(Sun|Mon|Tue|Wed|Thu|Fri|Sat)\w*\s+)?(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})/);
+  const m = String(text ?? '').match(/(?:\b(Sun|Mon|Tue|Wed|Thu|Fri|Sat)\w*\s+)?(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})(?::\d{2})?\s*([^\s\d][^\s]*)?/);
   if (!m) return null;
-  const [, day, y, mo, d, h, mi] = m;
+  const [, day, y, mo, d, h, mi, suffix] = m;
+  if (suffix && !/^(UTC|Z|GMT)$/i.test(suffix)) {
+    throw new ScheduleError(`"${text}": "${suffix}" after the time is not understood -- write times as 24-hour UTC, e.g. 19:00`);
+  }
+  if (Number(h) > 23 || Number(mi) > 59) throw new ScheduleError(`"${text}" is not a 24-hour time`);
   const iso = `${y}-${mo}-${d}T${h.padStart(2, '0')}:${mi}:00Z`;
   const ms = Date.parse(iso);
   if (Number.isNaN(ms)) return null;
@@ -262,8 +270,18 @@ export function parseActionCalls(actionText, watchText = '') {
   let lastEnd = 0;
   for (const m of found) {
     const before = text.slice(Math.max(0, m.index - 40), m.index);
-    if (/\b(do not|don't|never|must not|not|no longer|without)\s+(call|send|run|re-?run|retry)?\s*$/i.test(before)) {
-      warnings.push(`"${m[0]}" is negated ("${before.trim().slice(-30)}") -- not treated as a call to send`);
+    const next = found[found.indexOf(m) + 1];
+    const after = text.slice(m.index + m[0].length, next ? next.index : text.length);
+    if (/\b(do not|don't|never|must not|not|no longer|without|skip|skipped|if|unless|nobody|no one)\b[\s\w-]{0,25}$/i.test(before) ||
+        /^\W*(is|are|was|were|will be|must be|should be)?\s*(not|never)\b/i.test(after) ||
+        /\b(nobody|no one)\b|\bnot\s+(be\s+)?(sent|called|cranked)\b/i.test(after)) {
+      warnings.push(`"${m[0]}" is negated or conditional ("${(before.trim().slice(-25) + ' ' + m[0] + after.slice(0, 25)).trim()}") -- not treated as a call to send`);
+      continue;
+    }
+    // The first call has to open the cell, or follow "then" ("Read X; then SubmitShares(Q1)"):
+    // "Confirm the cranker calls QuarterlyGateCheck(Q5)" describes a call, it does not order one.
+    if (accepted.length === 0 && text.slice(0, m.index).trim() !== '' && !/\bthen\b/i.test(text.slice(0, m.index))) {
+      warnings.push(`"${m[0]}" does not open the cell and is not introduced with "then" -- not treated as a call to send`);
       continue;
     }
     if (accepted.length > 0 && !/\bthen\b/i.test(text.slice(lastEnd, m.index))) {
@@ -271,8 +289,6 @@ export function parseActionCalls(actionText, watchText = '') {
       continue;
     }
     // "then re-run QuarterlyGateCheck(Q7) Tue 08:00" points at a later row, not a second call now.
-    const next = found[found.indexOf(m) + 1];
-    const after = text.slice(m.index + m[0].length, next ? next.index : text.length);
     if (accepted.length > 0 && (/\b(re-?run|retry|later|tomorrow)\b/i.test(text.slice(lastEnd, m.index)) ||
         /\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*\s+\d{1,2}:\d{2}\b|\b\d{4}-\d{2}-\d{2}\b/.test(after))) {
       warnings.push(`"${m[0]}" points at another time ("${after.trim().slice(0, 30)}") -- a later row, not a call to send now`);
@@ -292,8 +308,15 @@ export function parseActionCalls(actionText, watchText = '') {
     const asserted = reverts.filter((r) => !negatedAt(segment, r.index));
     if (reverts.length && !asserted.length) notes.push('"revert" appears only negated; not expecting a revert');
 
+    // The runbook's own convention is a capitalised PASS or FAIL. When a row has one, it is the
+    // outcome, even if the text also mentions a revert ("PASS (the earlier revert ... is cleared)").
+    const upperPass = /\bPASS(ED)?\b/.test(segment);
+    const upperFail = /\bFAIL(S|ED)?\b/.test(segment);
     let expect;
-    if (asserted.length) {
+    if (upperPass !== upperFail) {
+      expect = upperPass ? 'pass' : 'fail';
+      if (asserted.length) notes.push(`says ${upperPass ? 'PASS' : 'FAIL'} and mentions a revert; expecting ${expect}`);
+    } else if (asserted.length) {
       const named = errorNamesIn(segment.slice(asserted[0].index));
       const fromWatch = errorNamesIn(watch);
       if (named.length === 1) {
@@ -311,9 +334,6 @@ export function parseActionCalls(actionText, watchText = '') {
           ? `revert without a named error; the Watchtower column names several (${fromWatch.join(', ')}), so any revert matches`
           : 'revert without a named error: any revert matches');
       }
-    } else if (/\bPASS(ED)?\b/.test(segment) !== /\bFAIL(S|ED)?\b/.test(segment)) {
-      // An explicit capitalised outcome, and only one of them, is the runbook's convention.
-      expect = /\bPASS(ED)?\b/.test(segment) ? 'pass' : 'fail';
     } else if (/\bfail(s|ed)?\b/i.test(segment) && !/\bpass(es|ed)?\b/i.test(segment)) {
       expect = 'fail';
     } else if (/\b(pass(es|ed)?|success(ful)?|ok)\b/i.test(segment) && !/\bfail(s|ed)?\b/i.test(segment)) {

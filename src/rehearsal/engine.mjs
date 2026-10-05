@@ -58,11 +58,31 @@ const MATCH_SLACK_MS = 5 * 60_000;
 /** Lotus null rounds have no block; walk at most a day of them. */
 const MAX_NULL_WALK = 2880;
 
+/** After a dropped receipt wait: ask again this many times, this far apart. */
+const RECEIPT_POLLS = 6;
+const RECEIPT_POLL_MS = Number(process.env.CRANK_RECEIPT_POLL_MS || 10_000);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 const INTERFACES = Object.fromEntries(Object.entries(CALLS).map(([fn, c]) => [fn, new Interface(c.abi)]));
 const SWA_IFACE = INTERFACES.quarterlyGateCheck;
 const GATE_CALLDATA = SWA_IFACE.encodeFunctionData('quarterlyGateCheck', []).toLowerCase();
 
 export const calldataFor = (entry) => INTERFACES[entry.function].encodeFunctionData(entry.function, entry.args);
+
+/**
+ * Every send carries its step in the last five digits of its gas limit: step 31 goes out with
+ * 100,000,310, step 93.2 with 100,000,932. quarterlyGateCheck() and a repeated submitShares(q)
+ * are byte-identical, so nothing else on chain says which row the cranker meant; this does,
+ * without touching the calldata. It is readable on any explorer, and costs at most 0.1% more
+ * gas limit -- unused gas is not spent.
+ */
+const TAG_MOD = 100_000n;
+export function stepTag(id) {
+  const m = String(id).match(/^(\d+)(?:\.(\d))?$/);
+  const n = m ? Number(m[1]) * 10 + Number(m[2] ?? 0) : [...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 99_991, 7);
+  return BigInt(n) % TAG_MOD;
+}
+export const tagGasLimit = (limit, id) => ((BigInt(limit) + TAG_MOD - 1n) / TAG_MOD) * TAG_MOD + stepTag(id);
 
 export class RehearsalRefused extends Error {
   constructor(message) {
@@ -202,8 +222,18 @@ export function ethersChain({ provider, wallet, address, epochSeconds = 30 }) {
 
     receiptOf: (hash) => withRetry(() => provider.getTransactionReceipt(hash), { what: 'eth_getTransactionReceipt' }),
 
+    /** The last real block at or before `n`. Lotus has no state at a null round; its state is this one's. */
+    async realBlockAtOrBefore(n) {
+      for (let b = n; b >= 0 && b > n - MAX_NULL_WALK; b--) {
+        const blk = await read(() => provider.getBlock(b), 'eth_getBlockByNumber');
+        if (blk && blk !== NULL_ROUND) return b;
+      }
+      throw new Error(`no non-null block within ${MAX_NULL_WALK} epochs below ${n}`);
+    },
+
     async gateState(swa, blockTag = 'latest') {
-      const g = await readSwaGateState(provider, swa, blockTag);
+      const at = typeof blockTag === 'number' ? await chain.realBlockAtOrBefore(blockTag) : blockTag;
+      const g = await readSwaGateState(provider, swa, at);
       return { next: g.lastCheckedQuarter + 1, lastChecked: g.lastCheckedQuarter, steps: g.steps, complete: g.complete };
     },
 
@@ -250,7 +280,8 @@ export function ethersChain({ provider, wallet, address, epochSeconds = 30 }) {
         // Not Lotus, or the message is outside its lookback. Fall through to the replay.
       }
       try {
-        await provider.call({ from: address, to: req.to, data: req.data, gasLimit: req.gasLimit, blockTag: receipt.blockNumber - 1 });
+        const parent = await chain.realBlockAtOrBefore(Number(receipt.blockNumber) - 1);
+        await provider.call({ from: address, to: req.to, data: req.data, gasLimit: req.gasLimit, blockTag: parent });
         return { data: null, source: 'replay-passed', exitCode: null };
       } catch (err) {
         const v = classifyRevert(err);
@@ -349,6 +380,7 @@ export async function resolveGateQuarters(chain, txs, swa) {
     if (String(tx.to).toLowerCase() !== swa.toLowerCase() || String(tx.data).toLowerCase() !== GATE_CALLDATA) continue;
     try {
       tx.receipt = await chain.receiptOf(tx.hash);
+      if (!tx.receipt) return false; // mined, by the nonce, yet no receipt: do not guess its quarter
       const ev = tx.receipt?.status === 1 ? gateResultOf(tx.receipt, swa) : null;
       if (ev) {
         tx.testedQuarter = ev.quarter;
@@ -369,20 +401,32 @@ export async function resolveGateQuarters(chain, txs, swa) {
 /**
  * Attributes sent transactions to schedule entries.
  *
- * Each transaction goes, in nonce order, to the earliest-opening unmatched entry with the same
- * target and calldata whose window holds the block it landed in -- and, for a gate check whose
- * tested quarter is known, only to an entry naming that quarter. Entries the runbook marks done
- * take part as claimants, so their transactions are never credited to a later step.
+ * A transaction can belong to any entry with the same target and calldata whose window holds the
+ * block it landed in -- for a gate check whose tested quarter is known, only to an entry naming
+ * that quarter (or naming none). Entries the runbook marks done take part, so a transaction sent
+ * for a Complete row is never credited to a later step.
+ *
+ * Usually there is exactly one candidate. When there are several -- the same submitShares(q) on
+ * two rows, or gate rows without a quarter -- nothing on chain says which row the cranker meant.
+ * A row whose quarter matches exactly wins. Otherwise the transaction goes to the row the engine
+ * would have been sending at that moment, if its outcome is consistent with that row. When the
+ * evidence conflicts, every OTHER live candidate is returned in `ambiguous`: it may already have
+ * been sent, so the engine must not send it. A wrong guess then costs a hold and an alert, never a
+ * second message.
+ *
+ * @param {(tx, entry) => Promise<object|null>} outcomeOf  the decoded outcome of `tx`, or null
+ * @returns {Promise<{sentFor: Map, ambiguous: Map}>}
  */
-export function assignSends(entries, txs, targets) {
+export async function assignSends(entries, txs, targets, outcomeOf = async () => null) {
   const key = (to, data) => `${String(to).toLowerCase()}:${String(data).toLowerCase()}`;
   const ordered = [...entries].sort((a, b) => a.notBeforeMs - b.notBeforeMs || a.index - b.index);
   const keys = new Map(ordered.map((e) => [e.id, key(targets[e.contract], calldataFor(e))]));
   const sentFor = new Map();
+  const ambiguous = new Map();
   for (const tx of txs) {
     const k = key(tx.to, tx.data);
     const at = tx.timestamp * 1000;
-    const e = ordered.find(
+    let candidates = ordered.filter(
       (x) =>
         !sentFor.has(x.id) &&
         keys.get(x.id) === k &&
@@ -390,9 +434,42 @@ export function assignSends(entries, txs, targets) {
         at < x.notAfterMs + MATCH_SLACK_MS &&
         (tx.testedQuarter === undefined || x.gateQuarter === null || x.gateQuarter === tx.testedQuarter)
     );
-    if (e) sentFor.set(e.id, tx);
+    if (candidates.length === 0) continue;
+    if (tx.testedQuarter !== undefined) {
+      const exact = candidates.filter((x) => x.gateQuarter === tx.testedQuarter);
+      if (exact.length) candidates = exact;
+    }
+    // The engine's own sends say which step they were for (stepTag). A person's or production's
+    // do not, and fall through to the evidence below.
+    const tagged = tx.gasLimit === undefined || tx.gasLimit === null ? [] : candidates.filter((x) => stepTag(x.id) === BigInt(tx.gasLimit) % TAG_MOD);
+    if (tagged.length === 1) candidates = tagged;
+    let pick = candidates[0];
+    if (candidates.length > 1) {
+      // The engine sends in plan order, so at time `at` it would have been sending the earliest
+      // candidate that was open and not done then. If the outcome is consistent with that row,
+      // it is that row's. If the outcome fits another row instead, the evidence conflicts:
+      // credit the row it fits, and hold every other live candidate rather than risk a resend.
+      const o = await outcomeOf(tx, candidates[0]);
+      const fits = o ? candidates.filter((x) => matches(x, o)) : [];
+      const intended = candidates.find((x) => !x.done && at >= x.notBeforeMs && at + SEND_MARGIN_MS < x.notAfterMs);
+      let decisive;
+      if (intended && (fits.length === 0 || fits.includes(intended))) {
+        pick = intended;
+        decisive = true;
+      } else if (!intended && fits.length === 1) {
+        pick = fits[0]; // not a send the engine could have made: a person, or production mode
+        decisive = true;
+      } else {
+        pick = fits[0] ?? intended ?? candidates[0];
+        decisive = false;
+      }
+      if (!decisive) {
+        for (const x of candidates) if (x !== pick && !x.done && !ambiguous.has(x.id)) ambiguous.set(x.id, tx);
+      }
+    }
+    sentFor.set(pick.id, tx);
   }
-  return sentFor;
+  return { sentFor, ambiguous };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -540,6 +617,11 @@ export async function runRehearsal(p) {
     for (const e of [...eligible, ...closing]) {
       record({ ...base(e), decision: 'paused', epoch: head.number, result: 'not sent', message: `paused: ${pause.reason}` });
     }
+    // Deliberate, so not alerted -- but on the record, so a forgotten pause is visible in every run.
+    for (const e of justClosed) {
+      record({ ...base(e), decision: 'paused', epoch: head.number, result: 'window closed while paused',
+        message: `its window closed at ${e.notAfter} while the cranker was paused (${pause.reason})` }, 'warn');
+    }
     return finish();
   }
 
@@ -547,24 +629,38 @@ export async function runRehearsal(p) {
   // Scanned to the block before the head: on a load-balanced endpoint the next request can land
   // on a node one epoch behind, which refuses a query about a block it has not seen.
   let sentFor = new Map();
+  let ambiguous = new Map();
   let ledger = { complete: true, missing: 0 };
   let inFlight = false;
   const tracked = [...eligible, ...closing, ...justClosed];
   if (tracked.length && cranker) {
-    const fromMs = Math.min(...tracked.map((e) => e.notBeforeMs));
+    // Every row whose window reaches into the scan may claim a transaction, Complete rows included.
+    // Each must see its OWN transaction, or it would claim a later row's identical one and that
+    // row would be sent again. So the scan reaches back to the earliest such row's opening, and
+    // again from there, until no row opens earlier. Windows are bounded, so this stops.
+    let fromMs = Math.min(...tracked.map((e) => e.notBeforeMs));
+    let claimants;
+    for (;;) {
+      claimants = schedule.entries.filter((e) => e.notAfterMs + MATCH_SLACK_MS > fromMs && e.notBeforeMs <= latestMs);
+      const earliest = Math.min(...claimants.map((e) => e.notBeforeMs));
+      if (earliest >= fromMs) break;
+      fromMs = earliest;
+    }
     const scanHead = { number: Math.max(0, head.number - 1), timestamp: await chain.timestampAt(Math.max(0, head.number - 1)) };
     const found = await findSentSince(chain, Math.floor(fromMs / 1000) - LOOKBACK_MARGIN_SECONDS, scanHead);
     ledger = found;
     // Anything newer than the scanned block -- landed in the head block, or still in the mpool -- is
     // a send the ledger has not seen. Try to read the head block too; if that fails, or a message
     // is still pending, hold every send until a later run can see it.
-    const pending = await chain.nonceAt('pending');
-    if (ledger.complete && pending > (await chain.nonceAt(scanHead.number))) {
+    if (ledger.complete) {
       try {
         const tail = await findSentSince(chain, scanHead.timestamp + 1, head);
         if (!tail.complete) throw new Error('head block incomplete');
         found.txs.push(...tail.txs.filter((t) => !found.txs.some((x) => x.hash === t.hash)));
-        inFlight = pending > (await chain.nonceAt(head.number));
+        const atHead = await chain.nonceAt(head.number);
+        // 'pending' covers the mpool; 'latest' covers a block that landed after the head was read.
+        // Either one ahead of the scanned head is a send the ledger has not seen.
+        inFlight = (await chain.nonceAt('pending')) > atHead || (await chain.nonceAt('latest')) > atHead;
       } catch {
         inFlight = true;
       }
@@ -572,9 +668,13 @@ export async function runRehearsal(p) {
     if (ledger.complete && !(await resolveGateQuarters(chain, found.txs, targets.swa))) {
       ledger = { complete: false, missing: 0, reason: 'could not tell which quarter one of its gate checks tested' };
     }
-    // Done entries are claimants too: a transaction sent for a Complete row is never a later step's.
-    const claimants = schedule.entries.filter((e) => e.notAfterMs + MATCH_SLACK_MS > fromMs && e.notBeforeMs <= latestMs);
-    sentFor = assignSends(claimants, found.txs, targets);
+    const outcomeOf = async (tx, entry) => {
+      const receipt = tx.receipt ?? (await chain.receiptOf(tx.hash).catch(() => null));
+      if (!receipt) return null;
+      tx.receipt = receipt;
+      return readOutcome({ chain, entry, req: { to: tx.to, data: tx.data, gasLimit: tx.gasLimit }, receipt, targets }).catch(() => null);
+    };
+    ({ sentFor, ambiguous } = await assignSends(claimants, found.txs, targets, outcomeOf));
   }
 
   for (const e of justClosed) {
@@ -610,6 +710,9 @@ export async function runRehearsal(p) {
   // ---- send, in plan order ----------------------------------------------------------------
   let stopReason = null;
   let virtualGateNext = null; // a dry run's picture of the gate, advanced by the passes it would send
+  // The gate only moves forward. After one of this run's own gate checks lands, its event says where
+  // the gate is; a load-balanced node one epoch behind must not make the next step look blocked.
+  let gateFloor = null;
   for (const e of eligible) {
     const a = base(e);
     const already = sentFor.get(e.id);
@@ -634,6 +737,16 @@ export async function runRehearsal(p) {
       record({ ...a, decision: 'held', epoch: head.number, result: 'not sent', message: 'ledger incomplete; see above' }, 'warn');
       continue;
     }
+    const maybe = ambiguous.get(e.id);
+    if (maybe) {
+      const r = record({ ...a, decision: 'held', txHash: maybe.hash, epoch: maybe.blockNumber, result: 'possibly sent already',
+        message: `${maybe.hash} (epoch ${maybe.blockNumber}) could be this step's or another row's with the same call; ` +
+          'not sending it again' }, 'warn');
+      flagOnce(maybe.timestamp * 1000, r, `Rehearsal step ${e.id} held: it may already have been sent`,
+        `${r.message}. If ${maybe.hash} was not this step, send it by hand (Run workflow -> force_call). ` +
+          'Two rows with the same call and overlapping windows cannot be told apart on chain.');
+      continue;
+    }
     if (stopReason) {
       record({ ...a, decision: 'held', epoch: head.number, result: 'not sent', message: stopReason }, 'warn');
       continue;
@@ -650,11 +763,18 @@ export async function runRehearsal(p) {
     // The runbook labels each gate check with the quarter it tests. quarterlyGateCheck() takes no
     // argument -- it checks whatever quarter is next -- so if the chain has moved past the plan,
     // sending would test a different quarter and could consume a later step's check.
+    if (dryRun && e.function === 'quarterlyGateCheck' && virtualGateNext === null) {
+      try {
+        virtualGateNext = (await chain.gateState(targets.swa)).next;
+      } catch {
+        // the labelled check below reports it
+      }
+    }
     if (e.function === 'quarterlyGateCheck' && e.gateQuarter !== null) {
       let next = virtualGateNext;
       if (next === null) {
         try {
-          next = (await chain.gateState(targets.swa)).next;
+          next = Math.max((await chain.gateState(targets.swa)).next, gateFloor ?? 0);
         } catch (err) {
           stopReason = `could not read the SWA gate state (${err.shortMessage ?? err.message}); later steps wait for the next run`;
           const r = record({ ...a, decision: 'held', epoch: head.number, result: 'not sent', message: stopReason }, 'warn');
@@ -696,6 +816,8 @@ export async function runRehearsal(p) {
       }
     }
 
+    limit = tagGasLimit(limit, e.id);
+
     if (dryRun) {
       record({ ...a, decision: 'dry-run', epoch: head.number, result: 'would send',
         message: `to ${to}, gas ${limit}, pre-check: ${precheck}` });
@@ -704,7 +826,8 @@ export async function runRehearsal(p) {
     }
 
     // The window is checked again here: an earlier send's receipt wait can take a while.
-    if (Math.max(clock(), chainMs) + SEND_MARGIN_MS >= e.notAfterMs) {
+    const nowAgain = clock();
+    if (Math.max(nowAgain, chainMs + (nowAgain - nowMs)) + SEND_MARGIN_MS >= e.notAfterMs) {
       record({ ...a, decision: 'too-late', epoch: head.number, result: 'not sent',
         message: `the window closes at ${e.notAfter}; too close to start a send` }, 'warn');
       continue;
@@ -721,18 +844,28 @@ export async function runRehearsal(p) {
     }
     log.info(`rehearsal step=${e.id} broadcast ${tx.hash} (gas ${limit}; ${precheck})`);
 
-    let receipt;
+    let receipt = null;
     try {
       receipt = await chain.wait(tx, confirmations);
-    } catch (err) {
+    } catch {
+      // The node dropped the wait. The message is out; keep asking for its receipt a while longer.
+      for (let i = 0; i < RECEIPT_POLLS && !receipt; i++) {
+        await sleep(p.receiptPollMs ?? RECEIPT_POLL_MS);
+        receipt = await chain.receiptOf(tx.hash).catch(() => null);
+      }
+    }
+    if (!receipt) {
       stopReason = `step ${e.id} was broadcast as ${tx.hash} but its receipt could not be read; it is not resent`;
       const r = record({ ...a, decision: 'sent', txHash: tx.hash, epoch: head.number, result: 'receipt unknown', message: stopReason }, 'warn');
-      flag(r, `Rehearsal step ${e.id}: outcome unknown`, `${stopReason}. The next run reads the outcome; or check ${tx.hash} on an explorer.`);
+      flag(r, `Rehearsal step ${e.id}: outcome unknown`,
+        `${stopReason}. Check ${tx.hash} on an explorer and compare it with the plan (expect ${e.expect}). Later runs ` +
+          'record its outcome in their run record but do not alert on it again.');
       continue;
     }
 
     const req = { to, data, gasLimit: limit };
     const o = await readOutcome({ chain, entry: e, req, receipt, targets });
+    if (o.gate) gateFloor = Math.max(gateFloor ?? 0, o.gate.quarter + 1);
     const ok = matches(e, o);
     const r = record({
       ...a, decision: 'sent', txHash: tx.hash, epoch: o.epoch, result: describeOutcome(o), match: ok,

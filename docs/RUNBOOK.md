@@ -202,6 +202,7 @@ A run that sends nothing is the normal case. Most hours there is nothing due.
 | `chainAgreesWithConfig: false` | warn / critical | The schedule derived from `postPeriod` / `verificationWindow` disagrees with what the chain has bound. Critical when the chain is *ahead* of config. A one-quarter disagreement within 10 epochs of a binding is the head moving mid-run and no longer raises this (see above). | Stop. Pause the cranker. Compare the config against the deployment parameters and fix the config before resuming. If it fired once at a binding and the next run is clean, it was a race the margin did not cover — note it and move on. |
 | Contract address is `0x0000…0000` | warn | The network has no deployment, or an override variable is blank. | See [Changing a contract address](#changing-a-contract-address). |
 | Watchdog issue opened | warn | A crank is overdue on chain, whatever the crank job's own runs say. | Work the issue. Start with `npm run preflight`, then the crank workflow's recent runs. |
+| `Solstice cranker could not start` | critical | The configuration did not load: a missing or malformed secret (`CRANKER_PRIVATE_KEY`) or a mistyped variable. Nothing was sent. | Fix the secret or variable the alert names. The next run picks it up. |
 | **`NotLatestQuarter(q)`** | **critical** | **The submission window for quarter q has closed. Its share map is gone.** | [Follow the escalation below.](#what-to-do-if-notlatestquarter-fires) Do not retry. |
 
 **Keep `abi/` pinned to the commit that was deployed, not the one you last read.** Run 192
@@ -265,12 +266,16 @@ Rehearsal mode turns the decision over to the runbook's Schedule tab:
   while step 78's write is in its hold. Sent after the hold ends, it would pass instead and use up
   the gate check meant for step 86.
 - **At most once.** Before sending, the run reads the cranker's own nonce history to find every
-  transaction it sent since the window opened, and credits each to an entry by target and
-  calldata. Nothing is stored between runs. `quarterlyGateCheck()` has no argument, so a gate
-  check is credited by the quarter it actually tested: its `QuarterlyGateCheckResult` event, or
-  the gate's state at the block before it. A manual `force_call` sent inside the window counts as
-  the step. Rows marked Complete keep their own transactions. A step found already sent is still
-  checked against `expect`, and the result goes in the run record.
+  transaction it sent since the relevant windows opened, and credits each to an entry. Nothing is
+  stored between runs. Every send carries its step in the last five digits of its gas limit:
+  step 31 goes out with gas limit 100,000,310, and step 93.2 with 100,000,932. That tag is how a
+  run knows which row its own earlier sends were for. It is needed because `quarterlyGateCheck()`
+  and a repeated `submitShares(q)` are byte-identical. A gate check is also credited by the
+  quarter it actually tested: its `QuarterlyGateCheckResult` event, or the gate state at the block
+  before it. A send without a tag (a manual `force_call`, or production mode) is credited to the
+  row it most plausibly was. When two rows could both own it, the other row is **held, never
+  resent**, and a person is told. Rows marked Complete keep their own transactions. A step found
+  already sent is still checked against `expect`, and the result goes in the run record.
 - **Expected reverts are sent.** For `expect: revert:…` there is no `eth_call` or
   `eth_estimateGas` pre-check. It sends with an explicit gas limit (100,000,000), the message
   lands on chain with a non-zero exit code, and the run decodes the revert from the Lotus
@@ -317,7 +322,8 @@ costs a handful of RPC reads.
 
 Alerts carry no state between runs either. A problem is alerted on the runs inside
 `CRANK_REHEARSAL_REPORT_MINUTES` (default 15) of the moment it starts. Keep that setting equal to
-the trigger interval, and each problem is alerted about once. A dry run never alerts.
+the trigger interval, and each problem is alerted about once. When GitHub's own backstop schedule
+also fires inside that window, it can be twice. A dry run never alerts.
 
 ### Updating the schedule when the runbook changes
 
@@ -341,8 +347,9 @@ Either of these stops every automatic send, in both modes:
 - the `CRANK_PAUSED` variable set to `1` (quickest), or
 - a file named `PAUSED` at the repository root on the branch the workflow runs from.
 
-A paused run still reads and reports. A person pressing **Run workflow** with `force_call` still
-sends; that is the manual override.
+A paused run still reads and reports. Every step it skips is in the run record, including any
+whose window closes during the pause. A pause is deliberate, so none of this is alerted. A person
+pressing **Run workflow** with `force_call` still sends; that is the manual override.
 
 ### What the rehearsal alerts mean
 
@@ -350,8 +357,11 @@ sends; that is the manual override.
 | :-- | :-- | :-- |
 | `Rehearsal step N did not do what the plan expected` | The step was sent at its time and the chain did something else, e.g. a revert the plan did not predict, or a pass where it predicted a revert. The tx hash is in the alert. | Record it in the runbook's Notes. This is what a rehearsal is for; the cranker does not retry it. |
 | `Rehearsal step N held: the gate is not where the plan expects` | The SWA would check a different quarter than the row names, usually because an earlier gate check went out early or was missed. Nothing was sent. | Decide whether the plan or the chain is wrong. Fix the row and rebuild, or catch the gate up by hand. The cranker keeps checking until the window closes. |
-| `Rehearsal step N was not sent` | Its window closed with nothing sent: the trigger did not run, the cranker was paused, or the step was held. | If it still matters, send it by hand (`force_call`) and note the time. |
+| `Rehearsal step N was not sent` | Its window closed with nothing sent: the trigger did not run, or the step was held. (Not alerted when the cranker was paused; the run record shows it.) | If it still matters, send it by hand (`force_call`) and note the time. |
 | `Rehearsal step N could not be sent` | The node refused the broadcast or did not answer. Later steps in that run wait. | Usually transient; the next run retries inside the window. If it repeats, check the RPC endpoint and the wallet balance. |
+| `Rehearsal step N: outcome unknown` | The message was broadcast, but its receipt could not be read for over a minute. It will not be resent. | Look the tx hash up on an explorer and compare it with the row's expectation. Later run records show the outcome, but they do not alert on it. |
+| `Rehearsal step N held: a cranker transaction is stuck` | A message from the cranker has sat in the mpool for a report window, so no step is sent until it lands. | Find the stuck message on an explorer. Usually it is underpriced; it clears or is replaced. |
+| `Rehearsal step N held: it may already have been sent` | A transaction in step N's window has the same call as another row's, and the chain cannot say which row it was. Usually this is a manual `force_call` sent during a window where two rows overlap. Rather than risk a second message, N is not sent. | Look the named tx up. If it was not step N, send N by hand. |
 | `Rehearsal cranker cannot account for its own transactions` | The cranker's nonce says it sent more than the blocks show, so it cannot tell which steps are done. It sends nothing until that clears. | Check the cranker address on an explorer. A one-off usually clears on the next run. |
 
 The watchdog does not know about the schedule. On days when the plan deliberately delays a crank,

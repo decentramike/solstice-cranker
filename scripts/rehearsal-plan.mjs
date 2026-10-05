@@ -11,14 +11,14 @@
  * Lists every step whose window overlaps the range, including ones already open. Labels:
  *   WOULD SEND   opens later; the first run at or after its time sends it
  *   OPEN NOW     its window is open; the next run sends it unless it was already sent
- *   CLOSED       its window has closed; it will not be sent
+ *   CLOSED       its window has closed, or closes within a minute; it will not be sent
  *   skip         the runbook marks it done
  * Any of them can still be held at run time: when paused, when it was already sent, or (gate
  * checks) when the SWA is not at the quarter the row names. Only a real run, against the chain,
  * decides that -- `Run workflow` with dry_run shows it.
  */
 import { DEFAULT_DEPLOYMENTS, loadDeployments } from '../src/rehearsal/deployments.mjs';
-import { DEFAULT_REHEARSAL_GAS_LIMIT } from '../src/rehearsal/engine.mjs';
+import { DEFAULT_REHEARSAL_GAS_LIMIT, SEND_MARGIN_MS } from '../src/rehearsal/engine.mjs';
 import { callLabel, loadSchedule, REHEARSAL_CHAIN_ID } from '../src/rehearsal/schedule.mjs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,7 +70,7 @@ async function main() {
       const revert = e.expectParsed.kind === 'revert';
       const decision = e.done
         ? `skip: runbook status "${e.status}"`
-        : e.notAfterMs <= now
+        : e.notAfterMs <= now + SEND_MARGIN_MS
           ? 'CLOSED'
           : e.notBeforeMs <= now
             ? 'OPEN NOW'

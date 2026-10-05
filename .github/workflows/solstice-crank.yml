@@ -134,6 +134,10 @@ jobs:
           # Blank = filecoin-project/solstice's deployments.json at the commit abi/ was built from:
           # the source of the addresses rehearsal mode sends to.
           SOLSTICE_DEPLOYMENTS: ${{ vars.SOLSTICE_DEPLOYMENTS }}
+          # Blank = 15: alerts fire on runs inside this many minutes of a problem starting. Keep it
+          # equal to the trigger interval. Blank gas = 100,000,000 for sends without a pre-check.
+          CRANK_REHEARSAL_REPORT_MINUTES: ${{ vars.CRANK_REHEARSAL_REPORT_MINUTES }}
+          CRANK_REHEARSAL_GAS_LIMIT: ${{ vars.CRANK_REHEARSAL_GAS_LIMIT }}
 
           # --- behaviour ---
           CRANK_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}

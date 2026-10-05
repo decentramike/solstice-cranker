@@ -76,7 +76,7 @@ export async function runRehearsalFromEnv(config, { now = () => Date.now() } = {
     try {
       const b = await chain.balance();
       balanceFil = b.fil;
-      if (b.wei < config.minBalanceWei) {
+      if (b.wei < config.minBalanceWei && !dryRun) {
         alerts.raise({ severity: 'warn', title: 'Solstice: cranker wallet is low on gas',
           body: `${address} holds ${b.fil} FIL, below the ${config.minBalanceFil} FIL threshold. See docs/WALLET.md.` });
       }
@@ -126,6 +126,10 @@ export function summariseRehearsal(record, explorerTxUrl) {
     '',
     record.next ? `Next: step **${record.next.id}** \`${record.next.call}\` at ${record.next.notBefore} (expect ${record.next.expect}).` : 'Nothing further is scheduled.',
     '',
-    record.exitCode === 0 ? '**Healthy.**' : '**Needs a person.** See the alert and `docs/RUNBOOK.md` → "Rehearsal mode".',
+    record.exitCode !== 0
+      ? '**Needs a person.** See the alert and `docs/RUNBOOK.md` → "Rehearsal mode".'
+      : record.actions.some((a) => a.match === false)
+        ? '**A step on the record did not match the plan.** It was alerted when it was sent; see the table.'
+        : '**Healthy.**',
   ].join('\n');
 }

@@ -17,12 +17,11 @@ import selectors from '../../abi/selectors.json' with { type: 'json' };
 import { ZERO_ADDRESS } from '../config.mjs';
 
 const PINNED_REF = selectors.generatedFrom?.ref;
-if (!/^[0-9a-f]{40}$/.test(PINNED_REF ?? '')) {
-  throw new Error('abi/selectors.json does not record the upstream commit it was built from');
-}
 
-export const DEFAULT_DEPLOYMENTS =
-  `https://raw.githubusercontent.com/filecoin-project/solstice/${PINNED_REF}/deployments.json`;
+/** null when abi/selectors.json does not record a full commit; loadDeployments then refuses. */
+export const DEFAULT_DEPLOYMENTS = /^[0-9a-f]{40}$/.test(PINNED_REF ?? '')
+  ? `https://raw.githubusercontent.com/filecoin-project/solstice/${PINNED_REF}/deployments.json`
+  : null;
 
 export class DeploymentsError extends Error {
   constructor(message) {
@@ -50,6 +49,10 @@ async function fetchText(url, { attempts = 3, timeoutMs = 10_000 } = {}) {
  * @returns {Promise<{sra: string, swa: string, source: string}>}
  */
 export async function loadDeployments(source = DEFAULT_DEPLOYMENTS, chainId) {
+  if (!source) {
+    throw new DeploymentsError('abi/selectors.json does not record the upstream commit abi/ was built from, so there is no ' +
+      'pinned deployments.json to read. Rebuild abi/, or set SOLSTICE_DEPLOYMENTS.');
+  }
   const isUrl = /^https?:\/\//i.test(source);
   let text;
   if (isUrl) {

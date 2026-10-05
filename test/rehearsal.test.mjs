@@ -17,7 +17,7 @@ import swaAbi from '../abi/StreamWeightActor.json' with { type: 'json' };
 import sraAbi from '../abi/ServiceRewardsActor.json' with { type: 'json' };
 import { loadConfig, resolvePause } from '../src/config.mjs';
 import {
-  actionLine, assertRehearsalChain, calldataFor, cborBytesToHex, findSentSince, RehearsalRefused, runRehearsal,
+  actionLine, assertRehearsalChain, calldataFor, cborBytesToHex, findSentSince, RehearsalRefused, runRehearsal, tagGasLimit,
 } from '../src/rehearsal/engine.mjs';
 import { runRehearsalFromEnv } from '../src/rehearsal/run.mjs';
 import { validateSchedule } from '../src/rehearsal/schedule.mjs';
@@ -78,7 +78,7 @@ class FakeChain {
     return this.txs
       .filter((t) => t.blockNumber === n)
       .slice(this.hidden)
-      .map((t, i) => ({ hash: t.hash, to: t.to, data: t.data, nonce: i, blockNumber: n, timestamp: this.ts(n) }));
+      .map((t, i) => ({ hash: t.hash, to: t.to, data: t.data, nonce: i, gasLimit: t.gasLimit, blockNumber: n, timestamp: this.ts(n) }));
   }
   /** gateNext is the gate now; at an earlier block, undo the gate checks that landed after it. */
   async gateState(swa, blockTag = 'latest') {
@@ -282,7 +282,7 @@ describe('expected reverts are sent anyway, and recorded', () => {
     const r = await run(chain, schedule(entry({ id: '80', gateQuarter: 7, expect: 'revert:StepWeightRecordsFailed' })), { now: '2026-10-05T22:25:30Z' });
     assert.equal(chain.estimates.length, 0, 'no eth_estimateGas / eth_call pre-check for an expected revert');
     assert.equal(chain.sends.length, 1);
-    assert.equal(chain.sends[0].gasLimit, 100_000_000n);
+    assert.equal(chain.sends[0].gasLimit, 100_000_800n, 'the explicit limit, its last five digits naming step 80');
     const a = r.actions[0];
     assert.equal(a.decision, 'sent');
     assert.match(a.txHash, /^0x[0-9a-f]{64}$/);
@@ -315,7 +315,7 @@ describe('an unexpected outcome is sent and flagged', () => {
       { now: '2026-10-06T19:00:30Z' });
     assert.equal(chain.estimates.length, 1, 'a pass is estimated first');
     assert.equal(chain.sends.length, 1, 'and sent even though the estimate predicted a revert');
-    assert.equal(chain.sends[0].gasLimit, 100_000_000n, 'with the explicit limit, since the estimate failed');
+    assert.equal(chain.sends[0].gasLimit, 100_000_931n, 'the explicit limit (the estimate failed), tagged with step 93.1');
     const a = r.actions[0];
     assert.equal(a.match, false);
     assert.equal(a.result, 'reverted NotBound(8)');
@@ -478,14 +478,31 @@ describe('QA round 1: attribution, windows, outcomes', () => {
     assert.equal(chain.sends.length, 1, 'step 80 was sent twice');
   });
 
-  it('a row marked Complete owns its transaction: step 31 is not credited with step 30\'s send', async () => {
+  // Revised in QA round 2. A send inside 31's window that LANDED fits 30.1 (pass), but at that
+  // moment the engine would have been sending 31. On chain that is a genuine conflict, so 31 is
+  // held and a person is told -- never sent a second time on a guess.
+  it('a Complete row\'s late send inside the next identical row\'s window: that row is held, not resent', async () => {
     const e30 = entry({ id: '30.1', function: 'submitShares', args: [3], notBefore: '2026-10-06T19:00:00Z', notAfter: '2026-10-06T19:45:00Z', status: 'Complete' });
     const e31 = entry({ id: '31', function: 'submitShares', args: [3], notBefore: '2026-10-06T19:15:00Z', notAfter: '2026-10-06T20:00:00Z', expect: 'revert:AlreadySubmitted' });
     const s = schedule(e30, e31);
     const chain = new FakeChain({ at: '2026-10-06T19:20:00Z', respond: () => ({ status: 0, revert: revertWith('AlreadySubmitted', [3]) }) });
     chain.sentEarlier('2026-10-06T19:16:00Z', s.entries[0]); // sent late, inside step 31's window
     const r = await run(chain, s, { now: '2026-10-06T19:20:00Z' });
-    assert.deepEqual(r.actions.map((a) => [a.id, a.decision, a.match]), [['31', 'sent', true]]);
+    assert.deepEqual(r.actions.map((a) => [a.id, a.decision, a.result]), [['31', 'held', 'possibly sent already']]);
+    assert.equal(chain.sends.length, 0);
+    assert.match(r.alerts.alerts[0].title, /step 31 held: it may already have been sent/);
+  });
+
+  it('...but the cranker\'s own send of 31 after someone else did 30.1 is simply 31', async () => {
+    const e30 = entry({ id: '30.1', function: 'submitShares', args: [3], notBefore: '2026-10-06T19:00:00Z', notAfter: '2026-10-06T19:45:00Z', status: 'Complete' });
+    const e31 = entry({ id: '31', function: 'submitShares', args: [3], notBefore: '2026-10-06T19:15:00Z', notAfter: '2026-10-06T20:00:00Z', expect: 'revert:AlreadySubmitted' });
+    const s = schedule(e30, e31);
+    const chain = new FakeChain({ at: '2026-10-06T19:16:00Z', respond: () => ({ status: 0, revert: revertWith('AlreadySubmitted', [3]) }) });
+    await run(chain, s, { now: '2026-10-06T19:16:00Z' });
+    chain.headNumber = epochOf('2026-10-06T19:31:00Z');
+    const r = await run(chain, s, { now: '2026-10-06T19:31:00Z' });
+    assert.deepEqual(r.actions.map((a) => [a.id, a.decision, a.match]), [['31', 'already-sent', true]]);
+    assert.equal(chain.sends.length, 1);
   });
 
   it('out of gas is not the revert a row was testing', async () => {
@@ -546,5 +563,79 @@ describe('QA round 1: attribution, windows, outcomes', () => {
     const later = await run(chain, schedule(entry({ id: '80' })), { now: '2026-10-05T22:46:00Z' });
     assert.equal(later.exitCode, 1);
     assert.match(later.alerts.alerts[0].title, /stuck/);
+  });
+});
+
+describe('QA round 2', () => {
+  it('a Complete row whose own send predates the scan cannot steal a later identical row\'s send', async () => {
+    // 30.1 (Complete) sent 19:00:30; 31 is the same submitShares(3), opening 19:15. The scan must
+    // reach back far enough for 30.1 to see its own transaction, or it takes 31's and 31 goes twice.
+    const s = schedule(
+      entry({ id: '30.1', function: 'submitShares', args: [3], notBefore: '2026-10-06T19:00:00Z', notAfter: '2026-10-06T19:45:00Z', status: 'Complete' }),
+      entry({ id: '31', function: 'submitShares', args: [3], notBefore: '2026-10-06T19:15:00Z', notAfter: '2026-10-06T20:00:00Z', expect: 'revert:AlreadySubmitted' }),
+    );
+    const chain = new FakeChain({ at: '2026-10-06T19:15:30Z', respond: () => ({ status: 0, revert: revertWith('AlreadySubmitted', [3]) }) });
+    chain.sentEarlier('2026-10-06T19:00:30Z', s.entries[0]);
+    await run(chain, s, { now: '2026-10-06T19:15:30Z' });
+    chain.headNumber = epochOf('2026-10-06T19:30:30Z');
+    const r2 = await run(chain, s, { now: '2026-10-06T19:30:30Z' });
+    assert.equal(chain.sends.length, 1, 'step 31 was broadcast twice');
+    assert.deepEqual(r2.actions.map((a) => [a.id, a.decision]), [['31', 'already-sent']]);
+  });
+
+  it('...and the same with two Pending rows whose windows differ in length', async () => {
+    const s = schedule(
+      entry({ id: 'A', function: 'submitShares', args: [3], notBefore: '2026-10-06T19:00:00Z', notAfter: '2026-10-06T19:30:00Z' }),
+      entry({ id: 'B', function: 'submitShares', args: [3], notBefore: '2026-10-06T19:15:00Z', notAfter: '2026-10-06T21:00:00Z', expect: 'revert:AlreadySubmitted' }),
+    );
+    const chain = new FakeChain({ at: '2026-10-06T19:00:30Z', respond: (req, c) => (c.sends.length ? { status: 0, revert: revertWith('AlreadySubmitted', [3]) } : { status: 1 }) });
+    await run(chain, s, { now: '2026-10-06T19:00:30Z' });
+    for (const t of ['2026-10-06T19:15:30Z', '2026-10-06T19:50:00Z', '2026-10-06T20:20:00Z']) {
+      chain.headNumber = Math.max(chain.headNumber, epochOf(t));
+      await run(chain, s, { now: t });
+    }
+    assert.equal(chain.sends.length, 2, `sends: ${chain.sends.length}`);
+  });
+
+  it('the run\'s own landed gate check moves the gate on, even if the next read is a block behind', async () => {
+    const s = schedule(
+      entry({ id: '78', gateQuarter: 5, notBefore: '2026-10-05T22:15:00Z' }),
+      entry({ id: '79', gateQuarter: 6, notBefore: '2026-10-05T22:20:00Z', expect: 'fail' }),
+    );
+    const chain = new FakeChain({ at: '2026-10-05T22:21:00Z', gateNext: 5, respond: (req, c) => ({ status: 1, gate: { quarter: c.gateNext, passed: c.gateNext === 5, steps: 5 } }) });
+    const stale = chain.gateState.bind(chain);
+    chain.gateState = async (swa, tag) => (tag === undefined || tag === 'latest' ? { next: 5, lastChecked: 4, steps: 4, complete: false } : stale(swa, tag));
+    const r = await run(chain, s, { now: '2026-10-05T22:21:00Z' });
+    assert.deepEqual(r.actions.map((a) => [a.id, a.decision]), [['78', 'sent'], ['79', 'sent']]);
+  });
+
+  it('a window that closes while paused is on the record, not alerted', async () => {
+    const chain = new FakeChain({ at: '2026-10-05T23:15:00Z' });
+    const r = await run(chain, schedule(entry({ id: '80', notAfter: '2026-10-05T23:10:00Z' })),
+      { now: '2026-10-05T23:15:00Z', pause: { paused: true, reason: 'CRANK_PAUSED is set' } });
+    assert.deepEqual(r.actions.map((a) => [a.id, a.decision, a.result]), [['80', 'paused', 'window closed while paused']]);
+    assert.deepEqual(r.alerts.alerts, []);
+    assert.equal(r.exitCode, 0);
+  });
+});
+
+describe('the gas limit names the step', () => {
+  it('step ids map to readable tags', () => {
+    assert.deepEqual(['31', '30.1', '93.2', '117'].map((id) => String(tagGasLimit(100_000_000n, id))), ['100000310', '100000301', '100000932', '100001170']);
+    assert.equal(tagGasLimit(42_172_838n, '86'), 42_200_860n, 'an estimate is rounded up to the next 100,000 first');
+  });
+
+  it('the 19:44 case: 30.1 too late, 31 sent and landed -- the tag says it was 31, so 30.1 is missed and 31 not resent', async () => {
+    const s = schedule(
+      entry({ id: '30.1', function: 'submitShares', args: [3], notBefore: '2026-10-06T19:00:00Z', notAfter: '2026-10-06T19:45:00Z' }),
+      entry({ id: '31', function: 'submitShares', args: [3], notBefore: '2026-10-06T19:15:00Z', notAfter: '2026-10-06T20:00:00Z', expect: 'revert:AlreadySubmitted' }),
+    );
+    const chain = new FakeChain({ at: '2026-10-06T19:44:00Z', respond: () => ({ status: 1 }) }); // Q3 never submitted: it lands
+    const r1 = await run(chain, s, { now: '2026-10-06T19:44:10Z' });
+    assert.deepEqual(r1.actions.map((a) => [a.id, a.decision]), [['30.1', 'too-late'], ['31', 'sent']]);
+    chain.headNumber = epochOf('2026-10-06T19:46:00Z');
+    const r2 = await run(chain, s, { now: '2026-10-06T19:46:00Z' });
+    assert.deepEqual(r2.actions.map((a) => [a.id, a.decision]), [['30.1', 'missed'], ['31', 'already-sent']]);
+    assert.equal(chain.sends.length, 1);
   });
 });

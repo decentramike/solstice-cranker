@@ -20,7 +20,7 @@ import sraAbi from '../abi/ServiceRewardsActor.json' with { type: 'json' };
 import {
   calldataFor, ethersChain, findSentSince, firstBlockAtOrAfter, readOutcome, runRehearsal,
 } from '../src/rehearsal/engine.mjs';
-import { buildScheduleFromCsv, parseActionCalls, validateSchedule } from '../src/rehearsal/schedule.mjs';
+import { buildScheduleFromCsv, parseActionCalls, parseRunbookTime as parseActionCallsTime, validateSchedule } from '../src/rehearsal/schedule.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const SWA = new Interface(swaAbi);
@@ -88,7 +88,7 @@ class FakeChain {
   async sentInBlock(n) {
     return this.txs
       .filter((t) => t.blockNumber === n)
-      .map((t, i) => ({ hash: t.hash, to: t.to, data: t.data, nonce: i, blockNumber: n, timestamp: this.ts(n) }));
+      .map((t, i) => ({ hash: t.hash, to: t.to, data: t.data, nonce: i, gasLimit: t.gasLimit, blockNumber: n, timestamp: this.ts(n) }));
   }
   /** gateNext is the gate now; at an earlier block, undo the gate checks that landed after it. */
   async gateState(swa, blockTag = 'latest') {
@@ -315,14 +315,17 @@ describe('QA: three byte-identical gate checks (78/79/80 at 22:15/22:20/22:25)',
     assert.equal(chain.sends.length, 1, 'step 79 was broadcast a second time');
   });
 
-  it('a row marked Complete still owns its tx: step 30 (Complete) sent 19:16 is not counted as step 31', async () => {
+  // Revised in QA round 2: a landed send inside 31's window fits 30 by outcome but is the send the
+  // engine would have made for 31 -- a genuine conflict, so 31 is held and alerted, never resent.
+  it('a row marked Complete sent late at 19:16, inside step 31\'s window: 31 is held, not sent on a guess', async () => {
     // Runbook steps 30/31: SubmitShares(Q3) at 19:00, then "SubmitShares(Q3) again, revert" at 19:15.
     const e30 = entry({ id: '30', function: 'submitShares', args: [3], notBefore: '2026-10-06T19:00:00Z', notAfter: '2026-10-06T21:15:00Z', status: 'Complete' });
     const e31 = entry({ id: '31', function: 'submitShares', args: [3], notBefore: '2026-10-06T19:15:00Z', notAfter: '2026-10-06T21:30:00Z', expect: 'revert:*' });
     const chain = new FakeChain({ at: '2026-10-06T19:20:00Z', respond: () => ({ status: 0, revert: revertWith('AlreadySubmitted', [3]) }) });
     chain.sentEarlier('2026-10-06T19:16:00Z', e30); // step 30 went out at 19:16 (cron jitter), then was marked Complete
     const r = await run(chain, schedule(e30, e31), { now: '2026-10-06T19:20:00Z' });
-    assert.deepEqual(decisions(r), [['31', 'sent']], `step 31 was "${r.actions[0]?.decision}" with tx ${r.actions[0]?.txHash}`);
+    assert.deepEqual(decisions(r), [['31', 'held']], `step 31 was "${r.actions[0]?.decision}" with tx ${r.actions[0]?.txHash}`);
+    assert.equal(chain.sends.length, 0);
   });
 });
 
@@ -738,5 +741,80 @@ describe('QA: build output determinism', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// =============================================================================================
+describe('QA round 2: a Lotus null round right before a reverted gate check', () => {
+  const nullErr = () => {
+    const error = { code: 1, message: 'requested epoch was a null round' };
+    return Object.assign(new Error(`could not coalesce error (error=${JSON.stringify(error)})`), { code: 'UNKNOWN_ERROR', shortMessage: 'could not coalesce error', info: { error } });
+  };
+
+  it('the gate state is read at the last real block, the tested quarter is known, nothing stalls', async () => {
+    const e80 = validateSchedule({ chainId: 314159, entries: [E80] }).entries[0];
+    const N = epochOf('2026-10-05T22:30:30Z');
+    const txs = [{ blockNumber: N, hash: `0x${'1'.padStart(64, '0')}`, to: TARGETS.swa, data: calldataFor(e80) }];
+    const nulls = new Set([N - 1]);
+    const headN = epochOf('2026-10-05T22:45:10Z');
+    const lastChecked = (tag) => (tag === 'latest' || tag >= N ? 6n : 6n); // a revert does not move the gate
+    const provider = {
+      async getBlock(tag, prefetch = false) {
+        const n = tag === 'latest' ? headN : tag;
+        if (nulls.has(n)) throw nullErr();
+        const mine = txs.filter((t) => t.blockNumber === n);
+        return { number: n, timestamp: GENESIS + n * 30, prefetchedTransactions: prefetch ? mine.map((t, i) => ({ ...t, from: CRANKER, nonce: i, gasLimit: 100_000_000n })) : undefined };
+      },
+      async getTransactionCount(a, tag) {
+        if (tag === 'latest' || tag === 'pending') return txs.length;
+        if (nulls.has(tag)) throw nullErr();
+        return txs.filter((t) => t.blockNumber <= tag).length;
+      },
+      async getStorage(addr, slot, tag) {
+        if (typeof tag === 'number' && nulls.has(tag)) throw nullErr();
+        return `0x${lastChecked(tag).toString(16).padStart(64, '0')}`;
+      },
+      async getTransactionReceipt(h) {
+        const t = txs.find((x) => x.hash === h);
+        return t && { hash: h, status: 0, blockNumber: t.blockNumber, gasUsed: 5_000_000n, logs: [] };
+      },
+      async send(m) {
+        throw new Error(`method not found: ${m}`);
+      },
+      async call() {
+        throw Object.assign(new Error('execution reverted'), { code: 'CALL_EXCEPTION', data: revertWith('StepWeightRecordsFailed', [16]) });
+      },
+      async estimateGas() {
+        return 1_000_000n;
+      },
+    };
+    const chain = ethersChain({ provider, wallet: null, address: CRANKER });
+    const r = await run(chain, schedule(E80), { now: '2026-10-05T22:45:10Z' });
+    assert.deepEqual(decisions(r), [['80', 'already-sent']]);
+    assert.equal(r.actions[0].result, 'reverted StepWeightRecordsFailed(16)', 'the replay must also skip the null round');
+    assert.equal(r.actions[0].match, true);
+    assert.deepEqual(r.alerts.alerts, []);
+    assert.equal(r.exitCode, 0);
+  });
+});
+
+describe('QA round 2: the builder refuses what it cannot read safely', () => {
+  it('"7:00 PM" and zone names other than UTC are errors, not silently 07:00 UTC', () => {
+    assert.throws(() => parseActionCallsTime('Mon 2026-10-05 7:00 PM'), /24-hour UTC/);
+    assert.throws(() => parseActionCallsTime('Mon 2026-10-05 19:00 CEST'), /24-hour UTC/);
+    assert.equal(parseActionCallsTime('Mon 2026-10-05 19:00 UTC').iso, '2026-10-05T19:00:00Z');
+  });
+
+  it('descriptions, conditions and negations are not calls', () => {
+    for (const text of ['Confirm nobody calls QuarterlyGateCheck(Q5)', 'Skip SubmitShares(Q5) this weekend', 'If SubmitShares(Q8) was missed, escalate',
+      'QuarterlyGateCheck(Q5) is NOT sent', 'QuarterlyGateCheck(Q5): nobody sends this']) {
+      assert.deepEqual(parseActionCalls(text).calls, [], text);
+    }
+  });
+
+  it('an explicit PASS wins over a revert the text merely mentions', () => {
+    const { calls } = parseActionCalls('QuarterlyGateCheck(Q7) PASS (the earlier revert StepWeightRecordsFailed is cleared)');
+    assert.equal(calls[0].expect, 'pass');
+    assert.match(calls[0].note, /mentions a revert/);
   });
 });
