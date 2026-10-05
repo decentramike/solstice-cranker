@@ -86,6 +86,8 @@ describe('cranker against the local devnet', { skip }, () => {
 
   before(async () => {
     ({ loadConfig } = await import(new URL('src/config.mjs', ROOT).href));
+    // The simulate retry backs off 2 s then 4 s in production; tests only need the ordering.
+    process.env.CRANK_SIMULATE_BACKOFF_MS ??= '20';
     ({ runCrank } = await import(new URL('src/crank.mjs', ROOT).href));
     ({ classifyRevert } = await import(new URL('src/errors.mjs', ROOT).href));
     // Derived from the public Hardhat mnemonic by index; never logged, never written to disk.
@@ -630,5 +632,191 @@ describe('cranker against the local devnet', { skip }, () => {
     const due = record.schedule.submitDueQuarter;
     assert.equal(record.schedule.submitDueAtEpoch, bindingOf(due));
     assert.equal(record.schedule.submitDeadlineEpoch, bindingOf(due + 1));
+  });
+  // ---- a sick node is not a contract fault (run 192 follow-up) --------------------------
+  // A proxy in front of the devnet fails chosen eth_calls with shapes captured from ethers v6
+  // (test/fixtures/provider-errors.json) and counts what reached it, so the tests can assert
+  // exactly how many times a simulation was tried and that nothing extra was broadcast.
+  describe('transport failures on the simulate step', () => {
+    const HTTP_503 = { status: 503, type: 'text/plain', body: 'Service Unavailable' };
+    // A rate limit returned as a JSON-RPC error inside an HTTP 200: ethers reports it as a
+    // CALL_EXCEPTION with no revert data, the shape that used to read as a contract fault.
+    const RATE_LIMIT_200 = (id) => ({
+      status: 200,
+      body: { jsonrpc: '2.0', id, error: { code: -32005, message: 'rate limit exceeded, please retry later' } },
+    });
+
+    let GATE, SUBMIT;
+    before(() => {
+      GATE = F.swa().interface.getFunction('quarterlyGateCheck').selector;
+      SUBMIT = F.sra().interface.getFunction('submitShares').selector;
+    });
+
+    const isCallTo = (payload, method, selector) =>
+      payload.method === method && String(payload.params?.[0]?.data ?? '').startsWith(selector);
+
+    /** `rule(payload)` returns a canned answer, or null to forward the request untouched. */
+    async function faultProxy(upstream, rule) {
+      const { createServer } = await import('node:http');
+      const seen = [];
+      const server = createServer((req, res) => {
+        let body = '';
+        req.on('data', (c) => (body += c));
+        req.on('end', async () => {
+          const payload = JSON.parse(body);
+          seen.push(payload);
+          const canned = await rule(payload);
+          if (canned) {
+            const text = typeof canned.body === 'string' ? canned.body : JSON.stringify(canned.body);
+            res.writeHead(canned.status, { 'content-type': canned.type ?? 'application/json' });
+            res.end(text);
+            return;
+          }
+          const upstreamRes = await fetch(upstream, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+          const text = await upstreamRes.text();
+          res.writeHead(upstreamRes.status, { 'content-type': 'application/json' });
+          res.end(text);
+        });
+      });
+      await new Promise((r) => server.listen(0, '127.0.0.1', r));
+      // A path that stands in for an API key, so the tests can prove it never reaches a message.
+      return {
+        url: `http://127.0.0.1:${server.address().port}/rpc/v1/FAKE-KEY-DO-NOT-LOG`,
+        seen,
+        count: (method, selector) => seen.filter((p) => isCallTo(p, method, selector)).length,
+        close: () => new Promise((r) => server.close(r)),
+      };
+    }
+
+    it('two 503s on the gate simulation, then an answer: retried, and the gate lands', async () => {
+      const q = await nextUntouchedQuarter();
+      await F.postVolume(q, '4200');
+      await F.mineTo(bindingOf(q));
+
+      const config = makeConfig();
+      let failures = 0;
+      const proxy = await faultProxy(config.rpcUrl, (p) =>
+        isCallTo(p, 'eth_call', GATE) && failures < 2 ? (failures++, HTTP_503) : null
+      );
+      try {
+        const { record, exitCode } = await runCrank({ ...config, rpcUrl: proxy.url });
+        const gate = actionsFor(record, 'quarterlyGateCheck');
+        assert.equal(failures, 2);
+        assert.equal(gate[0].decision, 'sent', JSON.stringify(gate, null, 2));
+        assert.deepEqual(record.schedule.degraded, []);
+        assert.equal(exitCode, 0, JSON.stringify(record.actions, null, 2));
+      } finally {
+        await proxy.close();
+      }
+    });
+
+    it('gate simulation exhausts its retries: three tries, nothing sent, a degraded warning, exit 0', async () => {
+      const q = await nextUntouchedQuarter();
+      await F.postVolume(q, '4200');
+      await F.mineTo(bindingOf(q));
+      const gateBefore = await F.readSwaGateState();
+
+      const config = makeConfig();
+      const proxy = await faultProxy(config.rpcUrl, (p) => (isCallTo(p, 'eth_call', GATE) ? RATE_LIMIT_200(p.id) : null));
+      try {
+        const { record, exitCode, alerts } = await runCrank({ ...config, rpcUrl: proxy.url });
+
+        assert.equal(proxy.count('eth_call', GATE), 3, 'bounded at three tries');
+        assert.equal(actionsFor(record, 'submitShares')[0].decision, 'sent', 'the deadline call is unaffected');
+        assert.equal(actionsFor(record, 'quarterlyGateCheck').length, 0);
+        assert.equal((await F.readSwaGateState()).lastCheckedQuarter, gateBefore.lastCheckedQuarter);
+
+        // The exit code and the alerts agree: a warning, not a failure.
+        assert.deepEqual(record.schedule.degraded, ['quarterlyGateCheck catch-up']);
+        const degraded = alerts.alerts.find((a) => a.title.startsWith('Cranker ran degraded'));
+        assert.equal(degraded?.severity, 'warn');
+        assert.match(degraded.body, /failed 3 times in a row \(missing revert data\); nothing was broadcast/);
+        assert.ok(!JSON.stringify(alerts.alerts).includes('FAKE-KEY'), 'the RPC URL reached an alert');
+        assert.equal(alerts.worst === 'critical', false);
+        assert.equal(exitCode, 0, JSON.stringify(record.actions, null, 2));
+      } finally {
+        await proxy.close();
+      }
+    });
+
+    it('submitShares simulation exhausts its retries: three tries, nothing sent, the run aborts', async () => {
+      const q = await nextUntouchedQuarter();
+      await F.postVolume(q, '4200');
+      await F.mineTo(bindingOf(q));
+
+      const config = makeConfig();
+      const proxy = await faultProxy(config.rpcUrl, (p) => (isCallTo(p, 'eth_call', SUBMIT) ? HTTP_503 : null));
+      try {
+        // scripts/crank.mjs turns this rejection into a critical "aborted" alert and exit 1.
+        await assert.rejects(runCrank({ ...config, rpcUrl: proxy.url }), (err) => {
+          assert.match(err.message, new RegExp(`^submitShares\\(${q}\\): the RPC node failed 3 times in a row`));
+          assert.match(err.message, /nothing was broadcast$/);
+          assert.ok(!err.message.includes('FAKE-KEY'), 'the RPC URL reached the abort message');
+          return true;
+        });
+        assert.equal(proxy.count('eth_call', SUBMIT), 3, 'bounded at three tries');
+        assert.equal(proxy.seen.filter((p) => p.method === 'eth_sendRawTransaction').length, 0);
+        assert.ok((await F.readSraQuarterState()).lastSubmittedQuarter < q);
+      } finally {
+        await proxy.close();
+      }
+    });
+
+    it('a revert is an answer: simulated once, never retried', async () => {
+      const q = await nextUntouchedQuarter();
+      await F.postVolume(q, '4200');
+      await F.mineTo(bindingOf(q));
+      await crankUntilQuiet();
+
+      const config = makeConfig();
+      const proxy = await faultProxy(config.rpcUrl, () => null);
+      try {
+        const { record } = await runCrank({ ...config, rpcUrl: proxy.url });
+        const gate = actionsFor(record, 'quarterlyGateCheck');
+        assert.equal(gate[0].decision, 'skipped', JSON.stringify(gate, null, 2));
+        assert.equal(proxy.count('eth_call', GATE), 1, 'a revert was retried');
+      } finally {
+        await proxy.close();
+      }
+    });
+
+    it('a mined status-0 receipt reaches the race check instead of escaping as an error', async () => {
+      // ethers v6 throws CALL_EXCEPTION from tx.wait() for a status-0 receipt, with no revert
+      // data -- exactly the shape isTransportFailure now reads as a sick node, unless it carries
+      // the receipt. Force one: the moment the cranker simulates, someone else submits q -- after
+      // the cranker read lastSubmittedQuarter, before it sends. The proxy then answers the
+      // simulation and the gas estimate as if nothing had happened, so the message is mined and
+      // reverts AlreadySubmitted on chain.
+      const q = await nextUntouchedQuarter();
+      await F.postVolume(q, '4200');
+      await F.mineTo(bindingOf(q));
+
+      const config = makeConfig();
+      let competed = false;
+      const proxy = await faultProxy(config.rpcUrl, async (p) => {
+        if (isCallTo(p, 'eth_call', SUBMIT)) {
+          if (!competed) {
+            competed = true;
+            await (await F.sra(F.ACCOUNTS.orchestrator).submitShares(q)).wait();
+          }
+          return { status: 200, body: { jsonrpc: '2.0', id: p.id, result: '0x' } };
+        }
+        if (isCallTo(p, 'eth_estimateGas', SUBMIT)) return { status: 200, body: { jsonrpc: '2.0', id: p.id, result: '0x989680' } };
+        return null;
+      });
+      try {
+        const { record, exitCode } = await runCrank({ ...config, rpcUrl: proxy.url });
+        const submit = actionsFor(record, 'submitShares')[0];
+        assert.ok(competed, 'the cranker never simulated submitShares');
+        assert.equal(proxy.seen.filter((p) => p.method === 'eth_sendRawTransaction').length >= 1, true,
+          'the cranker never broadcast, so this did not test the mined-revert path');
+        assert.match(submit.txHash ?? '', /^0x[0-9a-f]{64}$/, JSON.stringify(submit, null, 2));
+        assert.equal(submit.decision, 'skipped', JSON.stringify(submit, null, 2));
+        assert.equal(submit.outcome, 'already-done');
+        assert.equal(exitCode, 0, JSON.stringify(record.actions, null, 2));
+      } finally {
+        await proxy.close();
+      }
+    });
   });
 });

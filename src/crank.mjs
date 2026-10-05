@@ -36,6 +36,13 @@ import { bindingEpoch, buildSchedule, compareWithChain, epochsToDuration, expiry
 /** Filecoin gas estimation runs tight; a little headroom is cheaper than a stuck quarter. */
 const GAS_LIMIT_MULTIPLIER = 14n; // /10
 
+/**
+ * Simulation retries on transport failure: three tries, waiting 2 s then 4 s. Bounded, because a
+ * run that waits forever on a dead node is worse than one that fails and lets the next start.
+ */
+const SIMULATE_ATTEMPTS = 3;
+const SIMULATE_BACKOFF_MS = Number(process.env.CRANK_SIMULATE_BACKOFF_MS || 2000);
+
 function newRunId() {
   return `${new Date().toISOString()}-${randomBytes(2).toString('hex')}`;
 }
@@ -54,10 +61,39 @@ async function attempt({ contract, method, args = [], call, quarter, config, ctx
   const fn = contract.getFunction(method);
 
   // ---- 1. simulate (free) --------------------------------------------------
-  try {
-    await fn.staticCall(...args);
-  } catch (err) {
-    if (isTransportFailure(err)) throw err;
+  // Transport failures get a few tries here before they abort anything: a node that answered
+  // with a 503, a rate limit or no revert data has told us nothing about the contract, and the
+  // next answer usually does. A revert is an answer, so it is never retried -- it is classified
+  // below. Nothing has been broadcast at this point, so retrying cannot double-send.
+  let simulated = false;
+  for (let tryNo = 1; !simulated; tryNo++) {
+    try {
+      await fn.staticCall(...args);
+      simulated = true;
+    } catch (err) {
+      if (!isTransportFailure(err)) {
+        return classifyAction(err);
+      }
+      if (tryNo >= SIMULATE_ATTEMPTS) {
+        // Exhausted; the caller decides what that means. submitShares has a deadline, so the run
+        // aborts, alerts critical and exits 1. The gate has none: it degrades to a warning.
+        // shortMessage only -- ethers' full message carries the RPC URL.
+        throw new Error(
+          `${label}: the RPC node failed ${SIMULATE_ATTEMPTS} times in a row ` +
+            `(${err.shortMessage ?? err.code ?? 'no detail'}); nothing was broadcast`,
+          { cause: err }
+        );
+      }
+      const waitMs = SIMULATE_BACKOFF_MS * 2 ** (tryNo - 1);
+      log.warn(`${label}: the node did not answer cleanly, retrying`, {
+        attempt: tryNo, of: SIMULATE_ATTEMPTS, inMs: waitMs, error: err.shortMessage ?? err.message,
+      });
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+  }
+
+  // ---- 1b. turn a revert into an action record ------------------------------
+  function classifyAction(err) {
     const verdict = classifyRevert(err);
     const severity = verdict.severity;
     (severity === 'critical' ? log.error : severity === 'warn' ? log.warn : log.info)(
@@ -99,7 +135,16 @@ async function attempt({ contract, method, args = [], call, quarter, config, ctx
     const tx = await fn(...args, overrides);
     log.info(`${label}: broadcast`, { tx: tx.hash });
 
-    const receipt = await tx.wait(config.confirmations);
+    // ethers v6 does not hand back a status-0 receipt: wait() throws CALL_EXCEPTION carrying it,
+    // with no revert data. Take the receipt back out so a mined revert reaches the race check
+    // below instead of escaping as an error. This is the only thing done with it -- never a resend.
+    let receipt;
+    try {
+      receipt = await tx.wait(config.confirmations);
+    } catch (err) {
+      if (err?.code !== 'CALL_EXCEPTION' || !err.receipt) throw err;
+      receipt = err.receipt;
+    }
 
     if (receipt.status === 1) {
       log.info(`${label}: landed`, { block: receipt.blockNumber, gas: String(receipt.gasUsed) });
@@ -311,7 +356,10 @@ export async function runCrank(config) {
   );
   const comparison = observed.unchecked
     ? { agrees: true, divergence: null }
-    : compareWithChain(schedule.dueQuarter, observed.quarter);
+    : compareWithChain(schedule.dueQuarter, observed.quarter, { geometry, epoch });
+  if (comparison.race) {
+    log.info('the head crossed a binding during the run', { message: comparison.message });
+  }
   if (!comparison.agrees) {
     log.warn('computed schedule disagrees with the chain', { message: comparison.message });
     alerts.raise({

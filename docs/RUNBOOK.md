@@ -120,11 +120,22 @@ watchdog adds `issues: write`; only keepalive has `contents: write`, and it hold
 | Input | Use |
 | :-- | :-- |
 | **dry_run** | Read chain state, decide, report, send nothing. Use this first, always, against anything new. |
-| **network** | Overrides `NETWORK` for this run only. Leave blank in normal operation. |
+| **force_call** | Sends ONE named call without the pre-send simulation, for scripted rehearsal reverts. Leave on `none` for a normal crank. |
+| **force_quarter** | The quarter for a forced `submitShares`. Ignored otherwise. |
 
 Runs are serialised: the concurrency group means a manual run waits for an in-flight
 scheduled run rather than racing it. A run in flight is never cancelled, because a
 cancelled run cannot tell you whether it already broadcast a transaction.
+
+**Space manual runs out — one, wait for it to finish, then the next.** Two reasons:
+
+- The concurrency group holds at most one *pending* run. Click **Run workflow** three
+  times while one is in flight and the middle one is cancelled before it starts — the
+  Actions tab shows it grey, and it never ran. Only the last click survives.
+- Every run makes a burst of RPC calls against the same endpoint the 15-minute trigger
+  uses. The public Glif endpoint rate-limits; a run that hits it now retries each
+  simulation three times (2 s, then 4 s) before giving up, but back-to-back runs are the
+  likeliest way to get there. No run so far has actually been rate-limited.
 
 The same, locally:
 
@@ -180,12 +191,25 @@ A run that sends nothing is the normal case. Most hours there is nothing due.
 | `AlreadySubmitted(q)` | info | Someone else sent it first. These calls are permissionless — this is the system working as designed. | Nothing. Confirm the on-chain `SharesSubmitted` event exists for q, then move on. |
 | `StepsComplete()` | info | The gate has taken all 8 steps. It is closed permanently and will never need calling again. | Nothing. Consider removing the gate from the schedule at the next maintenance pass. |
 | Gate write inside the SWA hold | info | The previous gate write is still in its timelock. Only happens when checks run late and close together. | Nothing. It retries after the hold expires. |
+| `PendingGateParams(task)` | info | A `SetGateParams` governance task is outstanding. The gate check refuses to run until it is executed or vetoed — every gate check reverts with this meanwhile, even one that would otherwise be `NotBound`. | Nothing. The gate has no deadline; it lands on the first run after the task resolves. |
+| `PendingWeightWrite(epoch)` | info | A discretionary SWA weight write is still settling in f02 until `epoch`. The gate check waits for it. | Nothing. It lands on the first run after that epoch. |
+| `the head crossed a binding during the run` (log line, not an alert) | info | The run read the head just before a quarter bound and probed the chain just after, so computed and chain quarters differ by exactly one, within 10 epochs of that binding. | Nothing. The cranker uses the chain's answer. This used to raise a false critical "config is too large" at 19:00 binding boundaries. |
 | Low balance | warn | Wallet below `CRANK_MIN_BALANCE_FIL`. Still working, for now. | [Top up the wallet](#topping-up-the-wallet). Do it the same day. An empty wallet is how a deadline gets missed. |
-| RPC unreachable / chain id mismatch | warn | The endpoint is down, rate-limited, or pointing at the wrong network. | Check the endpoint's status page. [Change the RPC endpoint](#changing-an-rpc-endpoint) if it stays down. The hourly retry covers a short outage. |
-| `chainAgreesWithConfig: false` | warn | The schedule derived from `postPeriod` / `verificationWindow` disagrees with what the chain has bound. | Stop. Pause the cranker. Compare the config against the deployment parameters and fix the config before resuming. |
+| RPC unreachable / chain id mismatch | warn | The endpoint is down, rate-limited, or pointing at the wrong network. HTTP 429, 5xx, and a call answered with no revert data at all (`missing revert data`) all count as the node, not the contract. | Check the endpoint's status page. [Change the RPC endpoint](#changing-an-rpc-endpoint) if it stays down. The next run covers a short outage. |
+| `Cranker ran degraded` … `quarterlyGateCheck(q): the RPC node failed 3 times in a row (…); nothing was broadcast` | warn | The gate simulation got no usable answer three times running. Nothing was sent; the run still exits 0, because the gate has no deadline. | Nothing if the next run is clean. If it repeats, treat it as RPC unreachable. |
+| `Solstice cranker aborted` … `submitShares(q): the RPC node failed 3 times in a row (…); nothing was broadcast` | critical | Same, for the call with a deadline. The run exits 1. | Check the endpoint. The next run retries on its own; once the node answers, `submitShares` goes out. If it is still failing with under a day of the window left, [change the RPC endpoint](#changing-an-rpc-endpoint). |
+| `reverted with unrecognised selector 0x…` | critical | The contract answered with an error the shipped ABI does not know: `abi/` was built from a different commit than the one deployed. | Rebuild `abi/` from the deployed commit — set `REF` in `devnet/prepare-contracts.mjs`, then `npm run contracts:build && npm run abi:generate` — and add a rule for the new error in `src/errors.mjs`. Look the selector up in the new `abi/selectors.json`. |
+| `chainAgreesWithConfig: false` | warn / critical | The schedule derived from `postPeriod` / `verificationWindow` disagrees with what the chain has bound. Critical when the chain is *ahead* of config. A one-quarter disagreement within 10 epochs of a binding is the head moving mid-run and no longer raises this (see above). | Stop. Pause the cranker. Compare the config against the deployment parameters and fix the config before resuming. If it fired once at a binding and the next run is clean, it was a race the margin did not cover — note it and move on. |
 | Contract address is `0x0000…0000` | warn | The network has no deployment, or an override variable is blank. | See [Changing a contract address](#changing-a-contract-address). |
 | Watchdog issue opened | warn | A crank is overdue on chain, whatever the crank job's own runs say. | Work the issue. Start with `npm run preflight`, then the crank workflow's recent runs. |
 | **`NotLatestQuarter(q)`** | **critical** | **The submission window for quarter q has closed. Its share map is gone.** | [Follow the escalation below.](#what-to-do-if-notlatestquarter-fires) Do not retry. |
+
+**Keep `abi/` pinned to the commit that was deployed, not the one you last read.** Run 192
+(1 Oct 2026) went red because `abi/` came from upstream `87fd57c`, while calibnet runs
+`0006edc` — which added the gate-check guard (#67) and its two errors. A healthy
+`PendingGateParams` revert decoded to nothing and was reported as a critical fault, three runs
+in a row. Whenever the contracts are redeployed or upgraded, move `REF` in
+`devnet/prepare-contracts.mjs` to the deployed commit in the same PR, and rebuild.
 
 ---
 

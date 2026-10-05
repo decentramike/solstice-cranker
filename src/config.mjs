@@ -293,4 +293,19 @@ function safeHost(url) {
   }
 }
 
-export { ConfigError, NETWORKS, truthy, safeHost };
+/**
+ * Strips the RPC URL out of text bound for a log or an alert.
+ *
+ * ethers writes the full request URL into `err.message` and `err.stack` for a SERVER_ERROR (a 429,
+ * a 5xx), so an API key in RPC_URL's path or query lands in whatever prints them. Actions masks the
+ * secret in its own log, but not in an email or a webhook body. Only `shortMessage` is clean.
+ */
+function redactRpcUrl(text, rpcUrl) {
+  if (text === null || text === undefined) return text;
+  let out = String(text);
+  if (rpcUrl) out = out.split(rpcUrl).join(`<RPC_URL ${safeHost(rpcUrl)}>`);
+  // Whatever form the URL took in the error -- normalised, re-encoded -- never pass a requestUrl on.
+  return out.replace(/("?requestUrl"?\s*[:=]\s*)"(?!<RPC_URL )[^"]*"/g, '$1"<redacted>"');
+}
+
+export { ConfigError, NETWORKS, truthy, safeHost, redactRpcUrl };

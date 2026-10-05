@@ -6,7 +6,7 @@
  * deployment, after an RPC change, and as the first thing to reach for when a run fails.
  * It sends nothing and costs nothing.
  */
-import { loadConfig, describeConfig, resolvePause, ZERO_ADDRESS } from '../src/config.mjs';
+import { loadConfig, describeConfig, redactRpcUrl, resolvePause, ZERO_ADDRESS } from '../src/config.mjs';
 import {
   connect, currentEpoch, hasCode, observeLatestBoundQuarter,
   readBalance, readChainGeometry, readSraQuarterState, readSwaGateState,
@@ -78,7 +78,7 @@ async function main() {
   try {
     connection = await connect(config);
   } catch (err) {
-    record('RPC reachable and on the expected chain', false, err.message);
+    record('RPC reachable and on the expected chain', false, redactRpcUrl(err.message, config.rpcUrl));
     process.exitCode = 1;
     return;
   }
@@ -172,7 +172,7 @@ async function main() {
   });
 
   const observed = await observeLatestBoundQuarter(sra, schedule.dueQuarter);
-  const comparison = compareWithChain(schedule.dueQuarter, observed.quarter);
+  const comparison = compareWithChain(schedule.dueQuarter, observed.quarter, { geometry: full, epoch });
   record(
     'computed schedule agrees with the chain',
     comparison.agrees,

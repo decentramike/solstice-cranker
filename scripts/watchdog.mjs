@@ -13,7 +13,7 @@
  *
  * Exit 0 healthy, exit 1 overdue.
  */
-import { loadConfig } from '../src/config.mjs';
+import { loadConfig, redactRpcUrl } from '../src/config.mjs';
 import {
   connect, currentEpoch, hasCode, observeLatestBoundQuarter,
   readChainGeometry, readSraQuarterState, readSwaGateState,
@@ -194,6 +194,6 @@ async function main() {
 try {
   await main();
 } catch (err) {
-  log.error('watchdog aborted', { error: err.message });
+  log.error('watchdog aborted', { error: redactRpcUrl(err.message, process.env.RPC_URL) });
   process.exitCode = 1;
 }
