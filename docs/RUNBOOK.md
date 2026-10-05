@@ -244,6 +244,107 @@ The response is escalation and documentation.
 
 ---
 
+## Rehearsal mode: follow the runbook's schedule
+
+In production the cranker decides for itself: it simulates each call and sends the ones that
+would succeed, as soon as they would. That is wrong for the calibnet rehearsal. On 1 Oct and 5 Oct
+it skipped every row that was supposed to revert (steps 29, 31, 73) and sent steps 78 and 79 four
+hours early, at 18:16 and 18:17 instead of 22:15 and 22:20.
+
+Rehearsal mode turns the decision over to the runbook's Schedule tab:
+
+- **Only scheduled calls.** It sends what `config/rehearsal-schedule.json` lists (one entry per
+  call on each Actor = Cranker row) and nothing else. A due quarter with no row is not sent.
+- **Never early.** An entry goes out on the first run at or after its `notBefore` (the row's
+  Opens time), judged by the runner's clock *and* the chain head's timestamp. So a 19:00
+  `submitShares` cannot land before 19:00's binding epoch is on chain.
+- **Never late without a person.** After `notAfter` (the row's Closes time plus 120 minutes) it
+  is not sent at all, and the first run after that alerts that it was missed.
+- **At most once.** Before sending, the run reads the cranker's own nonce history to find every
+  transaction it sent since the entry opened, and matches them to entries by target and
+  calldata. Nothing is stored between runs. That includes a manual `force_call` sent inside the
+  window, which counts as the step.
+- **Expected reverts are sent.** For `expect: revert:…` there is no `eth_call` or
+  `eth_estimateGas` pre-check. It sends with an explicit gas limit (100,000,000), the message
+  lands on chain with a non-zero exit code, and the run decodes the revert from the Lotus
+  receipt.
+- **Gate checks check the quarter the row names.** `quarterlyGateCheck()` takes no argument; it
+  checks whatever quarter is next. If the SWA is not at the quarter the row says (`gateQuarter`),
+  the step is held and a person is told, rather than spending a later step's check.
+- **Calibnet only.** It refuses to start unless both `NETWORK` and the RPC endpoint are chain
+  314159.
+- **Addresses from upstream.** The SRA and SWA addresses come from `filecoin-project/solstice`'s
+  `deployments.json` (override with the `SOLSTICE_DEPLOYMENTS` variable), not from this repo.
+
+Every action is one log line:
+
+```
+info rehearsal step=80 fn=quarterlyGateCheck() tx=0x… epoch=4130420 decision=sent result="reverted StepWeightRecordsFailed(16)" expect=revert:StepWeightRecordsFailed match=yes
+```
+
+### Turning it on and off
+
+**Settings** → **Secrets and variables** → **Actions** → **Variables**:
+
+| Variable | Value |
+| :-- | :-- |
+| `CRANK_MODE` | `rehearsal` to follow the schedule. Delete it (or set `production`) to go back. |
+| `SOLSTICE_DEPLOYMENTS` | Leave unset. Set it to another `deployments.json` URL only to test a different deployment. |
+
+Check what it will do before switching it on. This prints the next 24 hours of sends and needs no
+key and no node:
+
+```bash
+npm run rehearsal:plan
+```
+
+Then run **Run workflow** with **dry_run** ticked. That makes the real decision against the
+chain, sends nothing, and shows every step it would send in the job summary.
+
+The trigger runs every 15 minutes, so a step can go out up to about 16 minutes after its Opens
+time. To land within a couple of minutes, set the cron-job.org job to every 5 minutes for the
+rehearsal week. A run with nothing open costs a handful of RPC reads.
+
+### Updating the schedule when the runbook changes
+
+The schedule file is built from the runbook. That is a read: the script fetches the tab's CSV
+export, and nothing in it can write to the sheet. The sheet id is not in this repository, because
+the repository is public and the runbook is shared by link, so pass it in:
+
+```bash
+RUNBOOK_SHEET_ID=<id from the runbook URL> npm run rehearsal:schedule
+```
+
+It prints every call it parsed and every assumption it made. The Action column is prose, so read
+the list. Then open a PR with the new `config/rehearsal-schedule.json`. The cranker only uses the
+committed file, so a runbook edit changes nothing until that PR merges.
+`npm run rehearsal:schedule -- --check` says whether the committed file is still current.
+
+### Pausing
+
+Either of these stops every automatic send, in both modes:
+
+- the `CRANK_PAUSED` variable set to `1` (quickest), or
+- a file named `PAUSED` at the repository root on the branch the workflow runs from.
+
+A paused run still reads and reports. A person pressing **Run workflow** with `force_call` still
+sends; that is the manual override.
+
+### What the rehearsal alerts mean
+
+| Alert | What it means | What to do |
+| :-- | :-- | :-- |
+| `Rehearsal step N did not do what the plan expected` | The step was sent at its time and the chain did something else, e.g. a revert the plan did not predict, or a pass where it predicted a revert. The tx hash is in the alert. | Record it in the runbook's Notes. This is what a rehearsal is for; the cranker does not retry it. |
+| `Rehearsal step N held: the gate is not where the plan expects` | The SWA would check a different quarter than the row names, usually because an earlier gate check went out early or was missed. Nothing was sent. | Decide whether the plan or the chain is wrong. Fix the row and rebuild, or catch the gate up by hand. The cranker keeps checking until the window closes. |
+| `Rehearsal step N was not sent` | Its window closed with nothing sent: the trigger did not run, the cranker was paused, or the step was held. | If it still matters, send it by hand (`force_call`) and note the time. |
+| `Rehearsal step N could not be sent` | The node refused the broadcast or did not answer. Later steps in that run wait. | Usually transient; the next run retries inside the window. If it repeats, check the RPC endpoint and the wallet balance. |
+| `Rehearsal cranker cannot account for its own transactions` | The cranker's nonce says it sent more than the blocks show, so it cannot tell which steps are done. It sends nothing until that clears. | Check the cranker address on an explorer. A one-off usually clears on the next run. |
+
+The watchdog does not know about the schedule. On days when the plan deliberately delays a crank,
+an "overdue" issue from it is expected.
+
+---
+
 ## The rehearsal weekend: pause and un-pause
 
 The plan is **"Rehearsal Plan for Sept 28th start"** in the rehearsal doc. An earlier 23 September

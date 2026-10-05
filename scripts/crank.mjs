@@ -7,6 +7,7 @@
  */
 import { loadConfig, describeConfig, redactRpcUrl } from '../src/config.mjs';
 import { runCrank } from '../src/crank.mjs';
+import { runRehearsalFromEnv, summariseRehearsal } from '../src/rehearsal/run.mjs';
 import { log, writeJobSummary } from '../src/logger.mjs';
 
 const ICON = { sent: 'sent', skipped: 'skipped', failed: 'FAILED', 'dry-run': 'dry run' };
@@ -52,11 +53,14 @@ async function main() {
   if (config.dryRun) log.warn('CRANK_DRY_RUN is set: simulating only, nothing will be broadcast');
 
   try {
-    const { record, exitCode, alerts } = await runCrank(config);
+    // CRANK_MODE=rehearsal: send exactly what config/rehearsal-schedule.json lists, when it says.
+    // Calibnet only; runRehearsalFromEnv refuses anything else before it touches the node.
+    const rehearsal = config.mode === 'rehearsal';
+    const { record, exitCode, alerts } = rehearsal ? await runRehearsalFromEnv(config) : await runCrank(config);
 
     // The run record is the machine-readable output; stdout carries it alone.
-    process.stdout.write(JSON.stringify(record, null, 2) + '\n');
-    writeJobSummary(summarise(record));
+    process.stdout.write(JSON.stringify(record, (k, v) => (typeof v === 'bigint' ? String(v) : v), 2) + '\n');
+    writeJobSummary(rehearsal ? summariseRehearsal(record, config.explorerTxUrl) : summarise(record));
 
     await alerts.flush({ minSeverity: 'warn' });
 

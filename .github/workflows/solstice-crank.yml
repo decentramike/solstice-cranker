@@ -127,6 +127,14 @@ jobs:
           CRANK_PAUSED_WINDOWS: ${{ vars.CRANK_PAUSED_WINDOWS }}
           CRANK_DISABLED_WEEKDAYS: ${{ vars.CRANK_DISABLED_WEEKDAYS }}
 
+          # --- mode; see docs/RUNBOOK.md, "Rehearsal mode" ---
+          # Blank = production. "rehearsal" sends only what config/rehearsal-schedule.json lists,
+          # at its times, and refuses to start on any chain but calibnet.
+          CRANK_MODE: ${{ vars.CRANK_MODE }}
+          # Blank = filecoin-project/solstice main's deployments.json, the source of the addresses
+          # rehearsal mode sends to.
+          SOLSTICE_DEPLOYMENTS: ${{ vars.SOLSTICE_DEPLOYMENTS }}
+
           # --- behaviour ---
           CRANK_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
           CRANK_MAX_GATE_CATCHUP: ${{ vars.CRANK_MAX_GATE_CATCHUP }}

@@ -11,3 +11,5 @@ dashboard/node_modules/
 *.log
 .DS_Store
 .devnet-state.json
+test/rehearsal-chain/artifacts/
+test/rehearsal-chain/cache/

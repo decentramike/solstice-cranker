@@ -22,7 +22,9 @@
     "demo": "node devnet/demo.mjs",
     "test": "node --test --test-concurrency=1 test/*.test.mjs",
     "test:integration": "node --test test/integration/*.test.mjs",
-    "crank:simple": "node scripts/crank-simple.mjs"
+    "crank:simple": "node scripts/crank-simple.mjs",
+    "rehearsal:schedule": "node scripts/build-rehearsal-schedule.mjs",
+    "rehearsal:plan": "node scripts/rehearsal-plan.mjs"
   },
   "dependencies": {
     "ethers": "^6.13.4"
