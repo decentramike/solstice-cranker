@@ -3,6 +3,9 @@
  * the wallet, alerts. The decisions themselves live in engine.mjs.
  */
 import { randomBytes } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { AlertSink } from '../alerts/index.mjs';
 import { connect, hasCode } from '../chain.mjs';
@@ -11,6 +14,41 @@ import { log } from '../logger.mjs';
 import { DEFAULT_DEPLOYMENTS, loadDeployments } from './deployments.mjs';
 import { assertRehearsalChain, ethersChain, runRehearsal } from './engine.mjs';
 import { loadSchedule, REHEARSAL_CHAIN_ID } from './schedule.mjs';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const LEDGER_DAYS = 7;
+
+/**
+ * The alert ledger: which alerts have already gone out. Only alerts read it -- every send decision
+ * comes from the chain. In Actions it lives in .crank-state/, carried from run to run by the cache
+ * steps in the workflow; when it is missing the engine falls back to a time window, which can
+ * repeat an alert but never drops one it would otherwise send.
+ */
+export function openAlertLedger(file, nowMs) {
+  let keys = {};
+  try {
+    keys = JSON.parse(readFileSync(file, 'utf8')).keys ?? {};
+  } catch {
+    // first run, evicted cache, or no ledger at all
+  }
+  for (const [k, at] of Object.entries(keys)) {
+    if (nowMs - Date.parse(at) > LEDGER_DAYS * 86_400_000) delete keys[k];
+  }
+  return {
+    has: (k) => k in keys,
+    add: (k) => {
+      keys[k] = new Date(nowMs).toISOString();
+    },
+    save() {
+      try {
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, JSON.stringify({ keys }, null, 1) + '\n');
+      } catch (err) {
+        log.warn('could not save the alert ledger; the next run may repeat an alert', { error: err.message });
+      }
+    },
+  };
+}
 
 /**
  * @returns {Promise<{record: object, exitCode: number, alerts: AlertSink}>}
@@ -55,6 +93,8 @@ export async function runRehearsalFromEnv(config, { now = () => Date.now() } = {
   const alerts = new AlertSink(config);
   const chain = ethersChain({ provider, wallet, address, epochSeconds: config.epochSeconds });
   const dryRun = config.dryRun || !address;
+  const ledgerFile = process.env.CRANK_ALERT_LEDGER || join(ROOT, '.crank-state', 'alerted.json');
+  const alertState = dryRun ? null : openAlertLedger(ledgerFile, now());
   const result = await runRehearsal({
     schedule,
     targets,
@@ -63,6 +103,7 @@ export async function runRehearsalFromEnv(config, { now = () => Date.now() } = {
     nowMs: now(),
     clock: now,
     dryRun,
+    alertState,
     pause,
     gasLimit: config.rehearsal.gasLimit,
     reportWindowMs: config.rehearsal.reportWindowMinutes * 60_000,
@@ -70,6 +111,8 @@ export async function runRehearsalFromEnv(config, { now = () => Date.now() } = {
     alerts,
     log,
   });
+
+  alertState?.save();
 
   let balanceFil = null;
   if (address) {
@@ -129,7 +172,9 @@ export function summariseRehearsal(record, explorerTxUrl) {
     record.exitCode !== 0
       ? '**Needs a person.** See the alert and `docs/RUNBOOK.md` → "Rehearsal mode".'
       : record.actions.some((a) => a.match === false)
-        ? '**A step on the record did not match the plan.** It was alerted when it was sent; see the table.'
-        : '**Healthy.**',
+        ? '**A step on the record did not match the plan.** It was alerted by the run that sent it; see the table.'
+        : record.actions.some((a) => ['blocked', 'held', 'missed', 'too-late', 'failed'].includes(a.decision))
+          ? '**A step is held or was not sent** (already alerted). See the table.'
+          : '**Healthy.**',
   ].join('\n');
 }

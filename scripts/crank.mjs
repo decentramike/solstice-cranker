@@ -5,7 +5,7 @@
  * Exit 0 means the run is healthy: either the cranks landed, or they were correctly not
  * due. Exit 1 means something needs a person, and an alert has already gone out.
  */
-import { loadConfig, describeConfig, redactRpcUrl } from '../src/config.mjs';
+import { loadAlertConfig, loadConfig, describeConfig, redactRpcUrl } from '../src/config.mjs';
 import { runCrank } from '../src/crank.mjs';
 import { log, writeJobSummary } from '../src/logger.mjs';
 
@@ -42,8 +42,10 @@ function summarise(record) {
  * cannot be loaded either, the log line above is all there is.
  */
 async function alertConfigError(err) {
+  const env = process.env;
+  if (env.CRANK_DRY_RUN && env.CRANK_DRY_RUN !== '0' && (env.CRANK_MODE ?? '').trim().toLowerCase() === 'rehearsal') return;
   try {
-    const partial = loadConfig(process.env, { requireKey: false });
+    const partial = loadAlertConfig(process.env);
     const { AlertSink } = await import('../src/alerts/index.mjs');
     const sink = new AlertSink(partial);
     sink.raise({
@@ -100,6 +102,12 @@ async function main() {
     const stack = redactRpcUrl(err.stack ?? null, config.rpcUrl);
     log.error('crank aborted', { error: message });
     if (stack) log.debug(stack);
+
+    // A rehearsal dry run is a person checking the plan, watching the run; it pages nobody.
+    if (config.dryRun && config.mode === 'rehearsal') {
+      process.exitCode = 1;
+      return;
+    }
 
     try {
       const { AlertSink } = await import('../src/alerts/index.mjs');

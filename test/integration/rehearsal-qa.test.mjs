@@ -14,6 +14,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ContractFactory, HDNodeWallet, Interface, JsonRpcProvider, Mnemonic } from 'ethers';
 
+import { tagGasLimit } from '../../src/rehearsal/engine.mjs';
+
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const CHAIN_DIR = join(ROOT, 'test', 'rehearsal-chain');
 const CONFIG = join(CHAIN_DIR, 'hardhat.config.cjs');
@@ -145,7 +147,8 @@ describe('QA: rehearsal mode on a local calibnet-id chain', { skip: !spawnSync(H
     let hash;
     try {
       // What the crashed run broadcast before dying.
-      const tx = await cranker.sendTransaction({ to: await swa.getAddress(), data: swaIface.encodeFunctionData('quarterlyGateCheck', []), gasLimit: 5_000_000n });
+      // What the crashed rehearsal run broadcast before dying: its gas limit carries step 80's tag.
+      const tx = await cranker.sendTransaction({ to: await swa.getAddress(), data: swaIface.encodeFunctionData('quarterlyGateCheck', []), gasLimit: tagGasLimit(5_000_000n, '80') });
       hash = tx.hash;
       const before = await nonce();
       const r1 = crank(file);

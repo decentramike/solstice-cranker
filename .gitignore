@@ -13,3 +13,4 @@ dashboard/node_modules/
 .devnet-state.json
 test/rehearsal-chain/artifacts/
 test/rehearsal-chain/cache/
+.crank-state/

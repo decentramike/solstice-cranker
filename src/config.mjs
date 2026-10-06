@@ -164,6 +164,37 @@ function withoutBlanks(env) {
 }
 
 /**
+ * Just enough configuration to send an alert: the ALERT_* variables, the network name and the run
+ * link. Validates nothing else, so a run whose full configuration is broken -- a malformed key, a
+ * mistyped mode -- can still say so (scripts/crank.mjs).
+ */
+export function loadAlertConfig(rawEnv = process.env) {
+  const env = withoutBlanks(rawEnv);
+  const networkName = env.NETWORK ?? 'calibnet';
+  return {
+    networkName,
+    chainId: BigInt(NETWORKS[networkName]?.chainId ?? 0),
+    rpcUrl: env.RPC_URL ?? NETWORKS[networkName]?.rpcUrl ?? null,
+    alerts: alertSettings(env),
+    runUrl:
+      env.GITHUB_SERVER_URL && env.GITHUB_REPOSITORY && env.GITHUB_RUN_ID
+        ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`
+        : null,
+  };
+}
+
+function alertSettings(env) {
+  return {
+    transports: (env.ALERT_TRANSPORT ?? 'console').split(',').map((s) => s.trim()).filter(Boolean),
+    to: env.ALERT_EMAIL_TO ?? null,
+    from: env.ALERT_EMAIL_FROM ?? 'cranker@fil.org',
+    sendgridKey: env.SENDGRID_API_KEY ?? null,
+    resendKey: env.RESEND_API_KEY ?? null,
+    webhookUrl: env.ALERT_WEBHOOK_URL ?? null,
+  };
+}
+
+/**
  * @param {object} env
  * @param {{requireKey?: boolean}} options
  *   `requireKey: false` loads a read-only configuration with no signer. The watchdog uses
@@ -238,7 +269,7 @@ export function loadConfig(rawEnv = process.env, { requireKey = true } = {}) {
   }
   // Checked only when they are used: a typo in a rehearsal-only variable must not stop production.
   let rehearsalGasLimit = 100_000_000n;
-  let reportWindowMinutes = 15;
+  let reportWindowMinutes = 30;
   if (mode === 'rehearsal') {
     try {
       rehearsalGasLimit = BigInt(env.CRANK_REHEARSAL_GAS_LIMIT ?? 100_000_000);
@@ -246,9 +277,10 @@ export function loadConfig(rawEnv = process.env, { requireKey = true } = {}) {
       throw new ConfigError(`CRANK_REHEARSAL_GAS_LIMIT is not an integer: ${env.CRANK_REHEARSAL_GAS_LIMIT}`);
     }
     if (rehearsalGasLimit < 21_000n) throw new ConfigError('CRANK_REHEARSAL_GAS_LIMIT must be at least 21000');
-    // A problem is alerted on runs inside this window, so set it to the trigger interval and each
-    // one is alerted about once. 15 matches the cron-job.org trigger.
-    reportWindowMinutes = Number(env.CRANK_REHEARSAL_REPORT_MINUTES ?? 15);
+    // A problem is alerted on runs inside this window. About twice the trigger interval: a run that
+    // starts late must not leave a window with no run in it, and an occasional second alert is the
+    // cheaper failure. 30 suits the 15-minute cron-job.org trigger.
+    reportWindowMinutes = Number(env.CRANK_REHEARSAL_REPORT_MINUTES ?? 30);
     if (!Number.isFinite(reportWindowMinutes) || reportWindowMinutes < 1) {
       throw new ConfigError('CRANK_REHEARSAL_REPORT_MINUTES must be a positive number');
     }
@@ -297,14 +329,7 @@ export function loadConfig(rawEnv = process.env, { requireKey = true } = {}) {
     },
     stateDir: env.CRANK_STATE_DIR ? resolve(env.CRANK_STATE_DIR) : null,
 
-    alerts: {
-      transports: (env.ALERT_TRANSPORT ?? 'console').split(',').map((s) => s.trim()).filter(Boolean),
-      to: env.ALERT_EMAIL_TO ?? null,
-      from: env.ALERT_EMAIL_FROM ?? 'cranker@fil.org',
-      sendgridKey: env.SENDGRID_API_KEY ?? null,
-      resendKey: env.RESEND_API_KEY ?? null,
-      webhookUrl: env.ALERT_WEBHOOK_URL ?? null,
-    },
+    alerts: alertSettings(env),
 
     runUrl:
       env.GITHUB_SERVER_URL && env.GITHUB_REPOSITORY && env.GITHUB_RUN_ID

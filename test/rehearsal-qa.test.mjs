@@ -18,7 +18,7 @@ import { getAddress, Interface } from 'ethers';
 import swaAbi from '../abi/StreamWeightActor.json' with { type: 'json' };
 import sraAbi from '../abi/ServiceRewardsActor.json' with { type: 'json' };
 import {
-  calldataFor, ethersChain, findSentSince, firstBlockAtOrAfter, readOutcome, runRehearsal,
+  calldataFor, ethersChain, findSentSince, firstBlockAtOrAfter, readOutcome, runRehearsal, tagGasLimit,
 } from '../src/rehearsal/engine.mjs';
 import { buildScheduleFromCsv, parseActionCalls, parseRunbookTime as parseActionCallsTime, validateSchedule } from '../src/rehearsal/schedule.mjs';
 
@@ -64,10 +64,12 @@ class FakeChain {
     return this;
   }
   /** A transaction the cranker (or a person with its key) sent earlier, landed at `iso`. */
-  sentEarlier(iso, entryLike, result = { status: 1 }) {
+  // Revised in QA round 3: pass the engine's tagged gas limit for the cranker's own sends; a send by
+  // hand (force_call) or by production mode carries no step tag.
+  sentEarlier(iso, entryLike, result = { status: 1 }, gasLimit = undefined) {
     const n = epochOf(iso);
     const v = validateSchedule({ chainId: 314159, entries: [{ ...entryLike }] }).entries[0];
-    const tx = { hash: `0xearly${this.txs.length}`, to: TARGETS[v.contract], data: calldataFor(v), blockNumber: n, result };
+    const tx = { hash: `0xearly${this.txs.length}`, to: TARGETS[v.contract], data: calldataFor(v), blockNumber: n, result, gasLimit };
     this.txs.push(tx);
     this.txs.sort((a, b) => a.blockNumber - b.blockNumber);
     return tx;
@@ -356,15 +358,16 @@ describe('QA: crash after broadcast, manual force-send', () => {
   it('crash-recovered step whose tx did NOT do what the plan expected is still flagged', async () => {
     // The crashed run never got to compare the outcome; no later run does either.
     const chain = new FakeChain({ at: '2026-10-05T22:31:00Z', respond: gatePass(7) });
-    chain.sentEarlier('2026-10-05T22:25:30Z', E80, { status: 1, gate: { quarter: 7, passed: true, steps: 6 } }); // landed; plan said revert
+    chain.sentEarlier('2026-10-05T22:25:30Z', E80, { status: 1, gate: { quarter: 7, passed: true, steps: 6 } }, tagGasLimit(100_000_000n, '80')); // the cranker's own send; landed, plan said revert
     const r = await run(chain, schedule(E80), { now: '2026-10-05T22:31:00Z' });
     assert.equal(chain.sends.length, 0);
     assert.notEqual(r.actions[0].match, null, 'outcome of the recovered tx was never evaluated (match is null)');
   });
 
   it('a manual force_call inside the window (cranker key) counts as the step', async () => {
-    const chain = new FakeChain({ at: '2026-10-05T22:17:00Z', gateNext: 5, respond: tonight });
-    const t = chain.sentEarlier('2026-10-05T22:16:00Z', E78);
+    const chain = new FakeChain({ at: '2026-10-05T22:17:00Z', gateNext: 6, respond: tonight });
+    // A landed gate check always carries its QuarterlyGateCheckResult; this one tested Q5 and passed.
+    const t = chain.sentEarlier('2026-10-05T22:16:00Z', E78, { status: 1, gate: { quarter: 5, passed: true, steps: 5 } });
     const r = await run(chain, schedule(E78), { now: '2026-10-05T22:17:00Z' });
     assert.deepEqual(decisions(r), [['78', 'already-sent']]);
     assert.equal(r.actions[0].txHash, t.hash);

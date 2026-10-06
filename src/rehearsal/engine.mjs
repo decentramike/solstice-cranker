@@ -28,7 +28,7 @@ import { Interface } from 'ethers';
 
 import { readBalance, readSwaGateState, withRetry } from '../chain.mjs';
 import { classifyRevert, isTransportFailure } from '../errors.mjs';
-import { CALLS, callLabel, REHEARSAL_CHAIN_ID } from './schedule.mjs';
+import { CALLS, callLabel, REHEARSAL_CHAIN_ID, stepTag, TAG_MOD } from './schedule.mjs';
 
 /**
  * The explicit gas limit for a call sent without a pre-check, in FEVM gas units.
@@ -58,6 +58,9 @@ const MATCH_SLACK_MS = 5 * 60_000;
 /** Lotus null rounds have no block; walk at most a day of them. */
 const MAX_NULL_WALK = 2880;
 
+/** With an alert ledger, a problem is still alerted on the first run that sees it up to a day late. */
+const ALERT_HORIZON_MS = 24 * 3_600_000;
+
 /** After a dropped receipt wait: ask again this many times, this far apart. */
 const RECEIPT_POLLS = 6;
 const RECEIPT_POLL_MS = Number(process.env.CRANK_RECEIPT_POLL_MS || 10_000);
@@ -71,18 +74,17 @@ export const calldataFor = (entry) => INTERFACES[entry.function].encodeFunctionD
 
 /**
  * Every send carries its step in the last five digits of its gas limit: step 31 goes out with
- * 100,000,310, step 93.2 with 100,000,932. quarterlyGateCheck() and a repeated submitShares(q)
- * are byte-identical, so nothing else on chain says which row the cranker meant; this does,
- * without touching the calldata. It is readable on any explorer, and costs at most 0.1% more
- * gas limit -- unused gas is not spent.
+ * 100,000,310, step 93.2 with 100,000,932 (stepTag, in schedule.mjs, where the schedule is checked
+ * for two rows sharing a tag). quarterlyGateCheck() and a repeated submitShares(q) are
+ * byte-identical, so nothing else on chain says which row the cranker meant; this does, without
+ * touching the calldata, and it is readable on any explorer. The limit is first rounded up to a
+ * whole million, so only a limit whose last six digits ARE a tag counts: a production estimate
+ * x1.4 such as 60,100,310 is not read as step 31. The extra limit is under 1,100,000 gas, inside
+ * Filecoin's 10% over-estimation allowance for these calls.
  */
-const TAG_MOD = 100_000n;
-export function stepTag(id) {
-  const m = String(id).match(/^(\d+)(?:\.(\d))?$/);
-  const n = m ? Number(m[1]) * 10 + Number(m[2] ?? 0) : [...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 99_991, 7);
-  return BigInt(n) % TAG_MOD;
-}
-export const tagGasLimit = (limit, id) => ((BigInt(limit) + TAG_MOD - 1n) / TAG_MOD) * TAG_MOD + stepTag(id);
+const TAG_ROUND = 1_000_000n; // the limit is rounded up to a whole million, then the tag added
+export const tagGasLimit = (limit, id) => ((BigInt(limit) + TAG_ROUND - 1n) / TAG_ROUND) * TAG_ROUND + stepTag(id);
+export { stepTag };
 
 export class RehearsalRefused extends Error {
   constructor(message) {
@@ -401,31 +403,53 @@ export async function resolveGateQuarters(chain, txs, swa) {
 /**
  * Attributes sent transactions to schedule entries.
  *
- * A transaction can belong to any entry with the same target and calldata whose window holds the
- * block it landed in -- for a gate check whose tested quarter is known, only to an entry naming
- * that quarter (or naming none). Entries the runbook marks done take part, so a transaction sent
- * for a Complete row is never credited to a later step.
+ * 1. The engine's own sends name their row in the gas limit (stepTag). A tag that names exactly
+ *    one schedule row with the same call is final for any message that landed at or after that
+ *    row opened -- even after its window closed, if it sat in the mpool.
+ * 2. Anything else is someone else's send: a person's force_call, or production mode. It can only
+ *    be credited by evidence. It may belong to any row with the same call whose window holds the
+ *    block it landed in (for a gate check, only a row naming the quarter it tested, or none). It
+ *    is credited to the row whose expectation its outcome fits, when exactly one does. Every other
+ *    live row it could belong to is returned in `ambiguous` -- and so is the only candidate when
+ *    its outcome does not fit. The engine holds those rows and tells a person. A wrong guess then
+ *    costs a hold and an alert, never a second message and never a silent skip.
  *
- * Usually there is exactly one candidate. When there are several -- the same submitShares(q) on
- * two rows, or gate rows without a quarter -- nothing on chain says which row the cranker meant.
- * A row whose quarter matches exactly wins. Otherwise the transaction goes to the row the engine
- * would have been sending at that moment, if its outcome is consistent with that row. When the
- * evidence conflicts, every OTHER live candidate is returned in `ambiguous`: it may already have
- * been sent, so the engine must not send it. A wrong guess then costs a hold and an alert, never a
- * second message.
+ * Entries the runbook marks done take part, so a transaction sent for a Complete row is never
+ * credited to a later step.
  *
+ * @param {object[]} entries      the rows whose windows reach into the scan
+ * @param {object[]} everyEntry   the whole schedule, for tags
  * @param {(tx, entry) => Promise<object|null>} outcomeOf  the decoded outcome of `tx`, or null
  * @returns {Promise<{sentFor: Map, ambiguous: Map}>}
  */
-export async function assignSends(entries, txs, targets, outcomeOf = async () => null) {
+export async function assignSends(entries, txs, targets, outcomeOf = async () => null, everyEntry = entries) {
   const key = (to, data) => `${String(to).toLowerCase()}:${String(data).toLowerCase()}`;
   const ordered = [...entries].sort((a, b) => a.notBeforeMs - b.notBeforeMs || a.index - b.index);
-  const keys = new Map(ordered.map((e) => [e.id, key(targets[e.contract], calldataFor(e))]));
+  const keyOf = (e) => key(targets[e.contract], calldataFor(e));
+  const keys = new Map([...everyEntry, ...ordered].map((e) => [e.id, keyOf(e)]));
   const sentFor = new Map();
   const ambiguous = new Map();
-  for (const tx of txs) {
+  const tagOf = (tx) => {
+    if (tx.gasLimit === undefined || tx.gasLimit === null) return null;
+    const low = BigInt(tx.gasLimit) % TAG_ROUND;
+    return low < TAG_MOD ? low : null;
+  };
+  // Tagged transactions first: a tag is proof, and evidence must never take a row a tag names.
+  const byProof = [...txs.filter((t) => tagOf(t) !== null && tagOf(t) !== 0n), ...txs.filter((t) => tagOf(t) === null || tagOf(t) === 0n)];
+  for (const tx of byProof) {
     const k = key(tx.to, tx.data);
     const at = tx.timestamp * 1000;
+
+    const tag = tagOf(tx);
+    // At or after the row opened: the engine never sends early, so an older message with the same
+    // tag is from some earlier schedule, not this row. No upper bound: a message that sat in the
+    // mpool can land after its window and is still that row's.
+    const own = tag === null || tag === 0n ? [] : everyEntry.filter((x) => keys.get(x.id) === k && stepTag(x.id) === tag && at >= x.notBeforeMs);
+    if (own.length === 1) {
+      if (!sentFor.has(own[0].id)) sentFor.set(own[0].id, tx);
+      continue;
+    }
+
     let candidates = ordered.filter(
       (x) =>
         !sentFor.has(x.id) &&
@@ -439,36 +463,15 @@ export async function assignSends(entries, txs, targets, outcomeOf = async () =>
       const exact = candidates.filter((x) => x.gateQuarter === tx.testedQuarter);
       if (exact.length) candidates = exact;
     }
-    // The engine's own sends say which step they were for (stepTag). A person's or production's
-    // do not, and fall through to the evidence below.
-    const tagged = tx.gasLimit === undefined || tx.gasLimit === null ? [] : candidates.filter((x) => stepTag(x.id) === BigInt(tx.gasLimit) % TAG_MOD);
-    if (tagged.length === 1) candidates = tagged;
-    let pick = candidates[0];
-    if (candidates.length > 1) {
-      // The engine sends in plan order, so at time `at` it would have been sending the earliest
-      // candidate that was open and not done then. If the outcome is consistent with that row,
-      // it is that row's. If the outcome fits another row instead, the evidence conflicts:
-      // credit the row it fits, and hold every other live candidate rather than risk a resend.
-      const o = await outcomeOf(tx, candidates[0]);
-      const fits = o ? candidates.filter((x) => matches(x, o)) : [];
-      const intended = candidates.find((x) => !x.done && at >= x.notBeforeMs && at + SEND_MARGIN_MS < x.notAfterMs);
-      let decisive;
-      if (intended && (fits.length === 0 || fits.includes(intended))) {
-        pick = intended;
-        decisive = true;
-      } else if (!intended && fits.length === 1) {
-        pick = fits[0]; // not a send the engine could have made: a person, or production mode
-        decisive = true;
-      } else {
-        pick = fits[0] ?? intended ?? candidates[0];
-        decisive = false;
-      }
-      if (!decisive) {
-        for (const x of candidates) if (x !== pick && !x.done && !ambiguous.has(x.id)) ambiguous.set(x.id, tx);
-      }
+    const o = await outcomeOf(tx, candidates[0]);
+    const fits = o ? candidates.filter((x) => matches(x, o)) : [];
+    const credited = fits.length === 1 ? fits[0] : null;
+    if (credited) sentFor.set(credited.id, tx);
+    for (const x of candidates) {
+      if (x !== credited && !x.done && !ambiguous.has(x.id)) ambiguous.set(x.id, tx);
     }
-    sentFor.set(pick.id, tx);
   }
+  for (const id of sentFor.keys()) ambiguous.delete(id);
   return { sentFor, ambiguous };
 }
 
@@ -561,8 +564,9 @@ export function actionLine(a) {
  * @param {boolean} p.dryRun
  * @param {{paused:boolean, reason:string|null}} p.pause
  * @param {bigint} p.gasLimit        explicit gas for calls sent without a pre-check
- * @param {number} p.reportWindowMs  a problem is alerted on runs inside this long after it starts;
- *                                   set it to the trigger interval so each is alerted about once
+ * @param {number} p.reportWindowMs  without an alert ledger, a problem is alerted on runs inside
+ *                                   this long after it starts
+ * @param {{has: Function, add: Function}} [p.alertState]  alert keys already sent, across runs
  * @param {number} p.confirmations
  * @param {{raise:Function}} p.alerts
  * @param {object} p.log
@@ -590,8 +594,22 @@ export async function runRehearsal(p) {
     alerts.raise({ severity: 'warn', title, body, context: { step: a.id, call: a.call, txHash: a.txHash } });
   };
   /** Alerts only on runs inside [anchor, anchor + reportWindow): about once, with no stored state. */
+  /**
+   * Alerts a problem once. With an alert ledger (p.alertState, carried between runs in the
+   * Actions cache), "once" is exact: the first run that sees it after `anchorMs`, within a day.
+   * Without one, it falls back to the runs inside [anchor, anchor + reportWindow).
+   */
   const flagOnce = (anchorMs, a, title, body) => {
-    if (nowMs >= anchorMs && nowMs < anchorMs + reportWindowMs) flag(a, title, body);
+    if (dryRun || nowMs < anchorMs) return;
+    const state = p.alertState;
+    if (state) {
+      const k = `${title}@${new Date(anchorMs).toISOString()}`;
+      if (state.has(k) || nowMs >= anchorMs + ALERT_HORIZON_MS) return;
+      state.add(k);
+      flag(a, title, body);
+      return;
+    }
+    if (nowMs < anchorMs + reportWindowMs) flag(a, title, body);
   };
 
   const head = await chain.head();
@@ -631,6 +649,7 @@ export async function runRehearsal(p) {
   let sentFor = new Map();
   let ambiguous = new Map();
   let ledger = { complete: true, missing: 0 };
+  let nextNonce = null; // pinned on every send: if anything else used it first, the node refuses
   let inFlight = false;
   const tracked = [...eligible, ...closing, ...justClosed];
   if (tracked.length && cranker) {
@@ -661,6 +680,7 @@ export async function runRehearsal(p) {
         // 'pending' covers the mpool; 'latest' covers a block that landed after the head was read.
         // Either one ahead of the scanned head is a send the ledger has not seen.
         inFlight = (await chain.nonceAt('pending')) > atHead || (await chain.nonceAt('latest')) > atHead;
+        nextNonce = atHead;
       } catch {
         inFlight = true;
       }
@@ -674,11 +694,18 @@ export async function runRehearsal(p) {
       tx.receipt = receipt;
       return readOutcome({ chain, entry, req: { to: tx.to, data: tx.data, gasLimit: tx.gasLimit }, receipt, targets }).catch(() => null);
     };
-    ({ sentFor, ambiguous } = await assignSends(claimants, found.txs, targets, outcomeOf));
+    ({ sentFor, ambiguous } = await assignSends(claimants, found.txs, targets, outcomeOf, schedule.entries));
   }
 
   for (const e of justClosed) {
     if (sentFor.has(e.id)) continue;
+    if (inFlight || ambiguous.has(e.id)) {
+      // Its message may be in the mpool, or may be someone else's send we could not attribute.
+      // "Send it by hand" would then be the wrong advice: it could spend a later step's check.
+      record({ ...base(e), decision: 'held', epoch: head.number, result: 'window closed; outcome not yet known',
+        message: inFlight ? 'a cranker message is still pending; the next run will know' : 'a send in its window may have been this step' }, 'warn');
+      continue;
+    }
     const a = record({ ...base(e), decision: 'missed', epoch: head.number, result: 'never sent',
       message: `its window closed at ${e.notAfter} with nothing sent` }, 'warn');
     if (cranker && ledger.complete) {
@@ -731,6 +758,13 @@ export async function runRehearsal(p) {
         r.message += `; outcome not readable (${err.shortMessage ?? err.message})`;
       }
       record(r, r.match === false ? 'warn' : 'info');
+      if (r.match === false) {
+        // The run that sent it alerted -- unless it was killed first. So say it again, once, from
+        // the landing: a second email about a mismatch is cheaper than none.
+        flagOnce(already.timestamp * 1000, r, `Rehearsal step ${e.id} did not do what the plan expected`,
+          `${r.call} (tx ${already.hash}, epoch ${already.blockNumber}) expected ${e.expect}; the chain says ${r.result}. ` +
+            'If the run that sent it already reported this, nothing is new.');
+      }
       continue;
     }
     if (!ledger.complete) {
@@ -740,11 +774,10 @@ export async function runRehearsal(p) {
     const maybe = ambiguous.get(e.id);
     if (maybe) {
       const r = record({ ...a, decision: 'held', txHash: maybe.hash, epoch: maybe.blockNumber, result: 'possibly sent already',
-        message: `${maybe.hash} (epoch ${maybe.blockNumber}) could be this step's or another row's with the same call; ` +
-          'not sending it again' }, 'warn');
+        message: `${maybe.hash} (epoch ${maybe.blockNumber}) has this step's call but was not sent by the rehearsal ` +
+          'cranker, and its outcome does not settle which row it was for; not sending this step on a guess' }, 'warn');
       flagOnce(maybe.timestamp * 1000, r, `Rehearsal step ${e.id} held: it may already have been sent`,
-        `${r.message}. If ${maybe.hash} was not this step, send it by hand (Run workflow -> force_call). ` +
-          'Two rows with the same call and overlapping windows cannot be told apart on chain.');
+        `${r.message}. If ${maybe.hash} was not this step, send it by hand (Run workflow -> force_call).`);
       continue;
     }
     if (stopReason) {
@@ -835,7 +868,8 @@ export async function runRehearsal(p) {
 
     let tx;
     try {
-      tx = await chain.send({ to, data, gasLimit: limit });
+      tx = await chain.send(nextNonce === null ? { to, data, gasLimit: limit } : { to, data, gasLimit: limit, nonce: nextNonce });
+      if (nextNonce !== null) nextNonce += 1;
     } catch (err) {
       stopReason = `step ${e.id} could not be broadcast (${err.shortMessage ?? err.message}); later steps wait for the next run`;
       const r = record({ ...a, decision: 'failed', epoch: head.number, result: 'not sent', message: stopReason }, 'warn');
@@ -874,9 +908,14 @@ export async function runRehearsal(p) {
       message: ok ? null : `expected ${e.expect}, got ${describeOutcome(o)}`,
     }, ok ? 'info' : 'warn');
     if (!ok) {
-      flag(r, `Rehearsal step ${e.id} did not do what the plan expected`,
-        `${r.call} was sent as scheduled (tx ${tx.hash}, epoch ${o.epoch}). The plan expected ${e.expect}; ` +
-          `the chain says ${describeOutcome(o)}.`);
+      // Anchored at the landing, as the next run's "found already sent" check is, so with an alert
+      // ledger the two are one alert.
+      const landedMs = (await chain.timestampAt(o.epoch).catch(() => Math.floor(nowMs / 1000))) * 1000;
+      const title = `Rehearsal step ${e.id} did not do what the plan expected`;
+      const body = `${r.call} was sent as scheduled (tx ${tx.hash}, epoch ${o.epoch}). The plan expected ${e.expect}; ` +
+        `the chain says ${describeOutcome(o)}.`;
+      if (p.alertState) p.alertState.add(`${title}@${new Date(landedMs).toISOString()}`);
+      flag(r, title, body);
     }
   }
 

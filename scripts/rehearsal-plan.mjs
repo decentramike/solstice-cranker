@@ -18,7 +18,7 @@
  * decides that -- `Run workflow` with dry_run shows it.
  */
 import { DEFAULT_DEPLOYMENTS, loadDeployments } from '../src/rehearsal/deployments.mjs';
-import { DEFAULT_REHEARSAL_GAS_LIMIT, SEND_MARGIN_MS } from '../src/rehearsal/engine.mjs';
+import { DEFAULT_REHEARSAL_GAS_LIMIT, SEND_MARGIN_MS, stepTag, tagGasLimit } from '../src/rehearsal/engine.mjs';
 import { callLabel, loadSchedule, REHEARSAL_CHAIN_ID } from '../src/rehearsal/schedule.mjs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -85,7 +85,7 @@ async function main() {
         to: targets[e.contract],
         expect: e.expect,
         precheck: revert ? 'none (expected revert)' : 'estimateGas x1.4',
-        gas: revert ? String(gas) : 'estimate x1.4',
+        gas: revert ? String(tagGasLimit(gas, e.id)) : `estimate x1.4, rounded up to a million, + step tag ${stepTag(e.id)}`,
         condition: e.gateQuarter === null ? '' : `SWA next quarter = Q${e.gateQuarter}`,
         decision,
       };

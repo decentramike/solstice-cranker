@@ -19,6 +19,8 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ContractFactory, getAddress, HDNodeWallet, Interface, JsonRpcProvider, Mnemonic, parseUnits } from 'ethers';
 
+import { tagGasLimit } from '../../src/rehearsal/engine.mjs';
+
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const CHAIN_DIR = join(ROOT, 'test', 'rehearsal-chain');
 const CONFIG = join(CHAIN_DIR, 'hardhat.config.cjs');
@@ -153,7 +155,8 @@ describe('QA2: rehearsal mode on a local calibnet-id chain (port 8570)', { skip:
     try {
       tx1 = await cranker.sendTransaction({ to, data: GATE.encodeFunctionData('quarterlyGateCheck', []), gasLimit: 5_000_000n, nonce: n0, ...fee(3) });
       await swa.setMode(2, { gasLimit: 200_000n, ...fee(2) });
-      tx2 = await cranker.sendTransaction({ to, data: GATE.encodeFunctionData('quarterlyGateCheck', []), gasLimit: 5_000_000n, nonce: n0 + 1, ...fee(1) });
+      // Revised in QA round 3: the run's own send carries its step tag (79); the force_call does not.
+      tx2 = await cranker.sendTransaction({ to, data: GATE.encodeFunctionData('quarterlyGateCheck', []), gasLimit: tagGasLimit(5_000_000n, '79'), nonce: n0 + 1, ...fee(1) });
       await provider.send('evm_mine', []);
     } finally {
       await provider.send('evm_setAutomine', [true]);

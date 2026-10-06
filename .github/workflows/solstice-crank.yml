@@ -106,6 +106,16 @@ jobs:
         # The cranker's only runtime dependency is ethers v6.
         run: npm ci --omit=dev
 
+      - name: Restore the rehearsal alert ledger
+        # Which rehearsal alerts have already gone out, so each is sent once. Alerts only: every send
+        # decision is made from the chain. Absent (first run, evicted), alerts fall back to a time
+        # window. Production mode never writes it.
+        uses: actions/cache/restore@v4
+        with:
+          path: .crank-state
+          key: crank-alerts-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: crank-alerts-
+
       - name: Crank
         env:
           # --- required ---
@@ -165,6 +175,13 @@ jobs:
           else
             node scripts/crank.mjs
           fi
+
+      - name: Save the rehearsal alert ledger
+        if: always() && hashFiles('.crank-state/alerted.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .crank-state
+          key: crank-alerts-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Point at the runbook on failure
         if: failure()

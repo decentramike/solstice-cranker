@@ -202,7 +202,7 @@ A run that sends nothing is the normal case. Most hours there is nothing due.
 | `chainAgreesWithConfig: false` | warn / critical | The schedule derived from `postPeriod` / `verificationWindow` disagrees with what the chain has bound. Critical when the chain is *ahead* of config. A one-quarter disagreement within 10 epochs of a binding is the head moving mid-run and no longer raises this (see above). | Stop. Pause the cranker. Compare the config against the deployment parameters and fix the config before resuming. If it fired once at a binding and the next run is clean, it was a race the margin did not cover — note it and move on. |
 | Contract address is `0x0000…0000` | warn | The network has no deployment, or an override variable is blank. | See [Changing a contract address](#changing-a-contract-address). |
 | Watchdog issue opened | warn | A crank is overdue on chain, whatever the crank job's own runs say. | Work the issue. Start with `npm run preflight`, then the crank workflow's recent runs. |
-| `Solstice cranker could not start` | critical | The configuration did not load: a missing or malformed secret (`CRANKER_PRIVATE_KEY`) or a mistyped variable. Nothing was sent. | Fix the secret or variable the alert names. The next run picks it up. |
+| `Solstice cranker could not start` | critical | The configuration did not load: a missing or malformed secret (`CRANKER_PRIVATE_KEY`), or a mistyped variable (`CRANK_MODE`, `CRANK_PAUSED_WINDOWS`, …). Nothing was sent. | Fix the secret or variable the alert names. The next run picks it up. |
 | **`NotLatestQuarter(q)`** | **critical** | **The submission window for quarter q has closed. Its share map is gone.** | [Follow the escalation below.](#what-to-do-if-notlatestquarter-fires) Do not retry. |
 
 **Keep `abi/` pinned to the commit that was deployed, not the one you last read.** Run 192
@@ -272,10 +272,11 @@ Rehearsal mode turns the decision over to the runbook's Schedule tab:
   run knows which row its own earlier sends were for. It is needed because `quarterlyGateCheck()`
   and a repeated `submitShares(q)` are byte-identical. A gate check is also credited by the
   quarter it actually tested: its `QuarterlyGateCheckResult` event, or the gate state at the block
-  before it. A send without a tag (a manual `force_call`, or production mode) is credited to the
-  row it most plausibly was. When two rows could both own it, the other row is **held, never
-  resent**, and a person is told. Rows marked Complete keep their own transactions. A step found
-  already sent is still checked against `expect`, and the result goes in the run record.
+  before it. A send without a tag (a manual `force_call`, or production mode) counts as a row's
+  only when its outcome fits that row's expectation and no other row's. Otherwise the rows it
+  could belong to are **held, never resent**, and a person is told. Rows marked Complete keep
+  their own transactions. A step found already sent is still checked against `expect`, and the
+  result goes in the run record.
 - **Expected reverts are sent.** For `expect: revert:…` there is no `eth_call` or
   `eth_estimateGas` pre-check. It sends with an explicit gas limit (100,000,000), the message
   lands on chain with a non-zero exit code, and the run decodes the revert from the Lotus
@@ -317,13 +318,14 @@ chain, sends nothing, and shows every step it would send in the job summary.
 
 The trigger runs every 15 minutes, so a step can go out up to about 16 minutes after its Opens
 time. To land within a couple of minutes, set the cron-job.org job to every 5 minutes for the
-rehearsal week, and set `CRANK_REHEARSAL_REPORT_MINUTES` to `5` to match. A run with nothing open
-costs a handful of RPC reads.
+rehearsal week. A run with nothing open costs a handful of RPC reads.
 
-Alerts carry no state between runs either. A problem is alerted on the runs inside
-`CRANK_REHEARSAL_REPORT_MINUTES` (default 15) of the moment it starts. Keep that setting equal to
-the trigger interval, and each problem is alerted about once. When GitHub's own backstop schedule
-also fires inside that window, it can be twice. A dry run never alerts.
+Each problem is alerted once. The workflow keeps a small alert ledger, `.crank-state/alerted.json`,
+in the Actions cache: the keys of the alerts already sent. It holds alerts only; no send decision
+reads it, so it cannot make the cranker send or skip anything. If the cache entry is missing
+(the first run, or evicted after a week unused), alerts fall back to the runs inside
+`CRANK_REHEARSAL_REPORT_MINUTES` (default 30, about twice the trigger interval) of the moment a
+problem starts. That fallback can repeat an alert but does not drop one. A dry run never alerts.
 
 ### Updating the schedule when the runbook changes
 
@@ -348,8 +350,11 @@ Either of these stops every automatic send, in both modes:
 - a file named `PAUSED` at the repository root on the branch the workflow runs from.
 
 A paused run still reads and reports. Every step it skips is in the run record, including any
-whose window closes during the pause. A pause is deliberate, so none of this is alerted. A person
-pressing **Run workflow** with `force_call` still sends; that is the manual override.
+whose window closes during the pause. A pause is deliberate, so none of this is alerted. The
+exception is the first run after a pause ends: it can still report a step whose window closed in
+the last half hour as not sent. A person pressing **Run workflow** with `force_call` still sends;
+that is the manual override. A `force_call` carries no step tag, so it counts as a step only when
+its outcome is what that step expects.
 
 ### What the rehearsal alerts mean
 

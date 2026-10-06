@@ -354,9 +354,11 @@ describe('QA2: somebody else calls quarterlyGateCheck()', () => {
     assert.equal(r1.actions[0].decision, 'sent');
     assert.equal(r1.actions[0].match, false, 'a check that tested Q6 is not step 78');
     assert.equal(r1.exitCode, 1);
+    // Revised in QA round 3: the send's gas limit says it was step 78, so it is 78's (a recorded
+    // mismatch: it tested Q6). Step 79 is then blocked -- Q6 has been checked -- not sent again.
     const r2 = await run(c.at('2026-10-05T22:26:00Z'), s, { now: '2026-10-05T22:26:00Z' });
-    assert.deepEqual(decisions(r2), [['78', 'blocked'], ['79', 'already-sent']], explain(r2));
-    assert.equal(r2.actions[1].match, true, 'Q6 landed failed, as 79 expects');
+    assert.deepEqual(decisions(r2), [['78', 'already-sent'], ['79', 'blocked']], explain(r2));
+    assert.equal(r2.actions[0].match, false, 'a check that tested Q6 is not step 78');
     assert.equal(c.sends.length, 1);
   });
 
@@ -607,11 +609,10 @@ describe('QA2: pending vs latest nonce', () => {
 
 // =============================================================================================
 describe('QA2: mismatches and alerts', () => {
-  // Revised in QA round 2. The sending run now polls for a dropped receipt, so the outcome is
-  // usually read there. When it cannot be, that run alerts "outcome unknown" (exit 1) and asks a
-  // person to check the tx; later runs record the outcome without paging again, and their job
-  // summary does not call the run "Healthy" while a mismatch is on the record.
-  it('receipt unknown on the sending run: that run alerts; the next run records the mismatch and does not say Healthy', async () => {
+  // Revised in QA rounds 2 and 3. The sending run now polls for a dropped receipt, so the outcome
+  // is usually read there. When it cannot be, that run alerts "outcome unknown" (exit 1); the next
+  // run that reads a mismatch alerts it too (once, from the landing) -- a killed run never could.
+  it('receipt unknown on the sending run: that run alerts; the next run alerts the mismatch it finds', async () => {
     const e = entry({ id: '93.1', function: 'submitShares', args: [8], notBefore: '2026-10-06T19:00:00Z', notAfter: '2026-10-06T19:45:00Z' });
     const c = new QChain({ at: '2026-10-06T19:01:00Z', sra: (q) => ({ status: 0, revert: revertWith('NotBound', [q]) }) });
     c.failWait = true;
@@ -627,9 +628,10 @@ describe('QA2: mismatches and alerts', () => {
     assert.equal(r2.actions[0].decision, 'already-sent');
     assert.equal(r2.actions[0].match, false);
     assert.equal(c.sends.length, 1);
+    assert.equal(r2.exitCode, 1);
+    assert.match(r2.alerts.alerts[0].title, /did not do what the plan expected/);
     const summary = summariseRehearsal({ ...r2, network: 'calibnet', balanceFil: '1', paused: false, dryRun: false }, null);
     assert.doesNotMatch(summary, /Healthy/);
-    assert.match(summary, /did not match the plan/);
   });
 });
 

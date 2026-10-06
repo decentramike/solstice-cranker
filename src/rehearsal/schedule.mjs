@@ -55,6 +55,18 @@ export const DEFAULT_GRACE_MINUTES = 30;
 
 const DONE_STATUSES = /^(complete|completed|done|skipped|skip|n\/a|cancelled|canceled)$/i;
 
+/**
+ * The step tag every rehearsal send carries in its gas limit's last five digits (see engine.mjs).
+ * "31" -> 310, "93.2" -> 932, "117" -> 1170; any other id is hashed. A schedule may not hold two
+ * rows with the same tag, nor a tag of 0 -- a plain 100,000,000 (force_call's limit) is untagged.
+ */
+export const TAG_MOD = 100_000n;
+export function stepTag(id) {
+  const m = String(id).match(/^(\d+)(?:\.(\d))?$/);
+  const n = m ? Number(m[1]) * 10 + Number(m[2] ?? 0) : [...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 99_991, 7);
+  return BigInt(n) % TAG_MOD;
+}
+
 export class ScheduleError extends Error {
   constructor(message) {
     super(message);
@@ -85,7 +97,10 @@ function isoInstant(value, what) {
     throw new ScheduleError(`${what} "${value}" is not an ISO 8601 UTC instant like 2026-10-06T08:00:00Z`);
   }
   const ms = Date.parse(value);
-  if (Number.isNaN(ms)) throw new ScheduleError(`${what} "${value}" is not a real date`);
+  // Date.parse rolls 2026-09-31 over to 1 October; a real date survives the round trip.
+  if (Number.isNaN(ms) || new Date(ms).toISOString().slice(0, 10) !== value.slice(0, 10)) {
+    throw new ScheduleError(`${what} "${value}" is not a real date`);
+  }
   return ms;
 }
 
@@ -141,10 +156,15 @@ export function validateSchedule(doc) {
   }
   if (!Array.isArray(doc.entries)) throw new ScheduleError('the schedule has no entries array');
   const seen = new Set();
+  const tags = new Map();
   const entries = doc.entries.map((raw, index) => {
     const e = validateEntry(raw);
     if (seen.has(e.id)) throw new ScheduleError(`schedule entry id "${e.id}" appears twice`);
     seen.add(e.id);
+    const tag = stepTag(e.id);
+    if (tag === 0n) throw new ScheduleError(`schedule entry "${e.id}" has step tag 0, which is reserved for untagged sends; renumber it`);
+    if (tags.has(tag)) throw new ScheduleError(`schedule entries "${tags.get(tag)}" and "${e.id}" share step tag ${tag}; renumber one`);
+    tags.set(tag, e.id);
     return { ...e, index };
   });
   entries.sort((a, b) => a.notBeforeMs - b.notBeforeMs || a.index - b.index);
@@ -222,16 +242,18 @@ const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
  * read as 07:00 -- twelve hours early -- and "19:00 CEST" two hours late.
  */
 export function parseRunbookTime(text) {
-  const m = String(text ?? '').match(/(?:\b(Sun|Mon|Tue|Wed|Thu|Fri|Sat)\w*\s+)?(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})(?::\d{2})?\s*([^\s\d][^\s]*)?/);
+  const m = String(text ?? '').match(/(?:\b(Sun|Mon|Tue|Wed|Thu|Fri|Sat)\w*\s+)?(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([^\s\d][^\s]*)?/);
   if (!m) return null;
-  const [, day, y, mo, d, h, mi, suffix] = m;
+  const [, day, y, mo, d, h, mi, sec = '00', suffix] = m;
   if (suffix && !/^(UTC|Z|GMT)$/i.test(suffix)) {
     throw new ScheduleError(`"${text}": "${suffix}" after the time is not understood -- write times as 24-hour UTC, e.g. 19:00`);
   }
-  if (Number(h) > 23 || Number(mi) > 59) throw new ScheduleError(`"${text}" is not a 24-hour time`);
-  const iso = `${y}-${mo}-${d}T${h.padStart(2, '0')}:${mi}:00Z`;
+  if (Number(h) > 23 || Number(mi) > 59 || Number(sec) > 59) throw new ScheduleError(`"${text}" is not a 24-hour time`);
+  const iso = `${y}-${mo}-${d}T${h.padStart(2, '0')}:${mi}:${sec}Z`;
   const ms = Date.parse(iso);
-  if (Number.isNaN(ms)) return null;
+  if (Number.isNaN(ms) || new Date(ms).toISOString().slice(0, 10) !== `${y}-${mo}-${d}`) {
+    throw new ScheduleError(`"${text}" is not a real date`);
+  }
   const actual = WEEKDAYS[new Date(ms).getUTCDay()];
   const warning = day && day !== actual ? `"${text}" says ${day} but ${y}-${mo}-${d} is a ${actual}` : null;
   return { iso, ms, warning };
@@ -248,7 +270,8 @@ function errorNamesIn(text) {
 }
 
 /** "not", "no longer", "never", "without", "must not" within a few words before position `at`. */
-const negatedAt = (text, at) => /\b(not|no longer|never|without|n't)\b[\s\w-]{0,20}$/i.test(text.slice(Math.max(0, at - 40), at));
+const negatedAt = (text, at) =>
+  /(\b(not|no|no longer|never|without|cannot)\b|n't\b)[\s\w-]{0,25}$/i.test(text.slice(Math.max(0, at - 40), at));
 
 /**
  * Turns one runbook Action cell into the calls it sends.
@@ -265,33 +288,42 @@ export function parseActionCalls(actionText, watchText = '') {
   const found = [...text.matchAll(CALL_RE)];
   const warnings = [];
 
-  // Which mentions are calls to send.
+  // Which mentions are calls to send. Anything doubtful is left out, with a warning: a call left
+  // out of the file is caught when the builder's output is reviewed, a call wrongly put in is sent.
   const accepted = [];
   let lastEnd = 0;
+  const TIME = /\b\d{1,2}:\d{2}\b|\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*\b|\b\d{4}-\d{2}-\d{2}\b/;
+  const NEGATED_AFTER =
+    /^\W*(is|are|was|were|will be|must be|should be)?\s*(not|never)\b|\b(do not|don't|won't|shouldn't|must not|will not|is not|isn't|not)\s+(be\s+)?(send|sent|call|called|run|cranked)\b|\b(skipped|cancel+ed|nobody|no one)\b/i;
   for (const m of found) {
     const before = text.slice(Math.max(0, m.index - 40), m.index);
     const next = found[found.indexOf(m) + 1];
     const after = text.slice(m.index + m[0].length, next ? next.index : text.length);
-    if (/\b(do not|don't|never|must not|not|no longer|without|skip|skipped|if|unless|nobody|no one)\b[\s\w-]{0,25}$/i.test(before) ||
-        /^\W*(is|are|was|were|will be|must be|should be)?\s*(not|never)\b/i.test(after) ||
-        /\b(nobody|no one)\b|\bnot\s+(be\s+)?(sent|called|cranked)\b/i.test(after)) {
-      warnings.push(`"${m[0]}" is negated or conditional ("${(before.trim().slice(-25) + ' ' + m[0] + after.slice(0, 25)).trim()}") -- not treated as a call to send`);
+    const clause = after.split(/[.;]/)[0];
+    if (/(\b(do not|don't|never|must not|not|no longer|without|skip|skipped|if|unless|nobody|no one)\b|n't\b)[\s\w-]{0,25}$/i.test(before) ||
+        NEGATED_AFTER.test(clause)) {
+      warnings.push(`"${m[0]}" is negated or conditional ("${(before.trim().slice(-25) + ' ' + m[0] + clause.slice(0, 30)).trim()}") -- not treated as a call to send`);
       continue;
     }
-    // The first call has to open the cell, or follow "then" ("Read X; then SubmitShares(Q1)"):
-    // "Confirm the cranker calls QuarterlyGateCheck(Q5)" describes a call, it does not order one.
-    if (accepted.length === 0 && text.slice(0, m.index).trim() !== '' && !/\bthen\b/i.test(text.slice(0, m.index))) {
-      warnings.push(`"${m[0]}" does not open the cell and is not introduced with "then" -- not treated as a call to send`);
-      continue;
+    // The first call has to open the cell, optionally after "Send"/"Call"/"Run", or follow "then"
+    // ("Read X; then SubmitShares(Q1)"). "Confirm the cranker calls QuarterlyGateCheck(Q5)"
+    // describes a call, it does not order one -- and then nothing later in that cell is a call either.
+    if (accepted.length === 0) {
+      const lead = text.slice(0, m.index).trim();
+      if (lead !== '' && !/^(send|call|run|crank)$/i.test(lead) && !/\bthen\b/i.test(lead)) {
+        warnings.push(`"${m[0]}" does not open the cell and is not introduced with "then" -- this row is read as a description, and nothing in it is sent`);
+        return { calls: [], warnings };
+      }
     }
     if (accepted.length > 0 && !/\bthen\b/i.test(text.slice(lastEnd, m.index))) {
       warnings.push(`"${m[0]}" is mentioned, not introduced with "then" -- not treated as a call to send`);
       continue;
     }
-    // "then re-run QuarterlyGateCheck(Q7) Tue 08:00" points at a later row, not a second call now.
-    if (accepted.length > 0 && (/\b(re-?run|retry|later|tomorrow)\b/i.test(text.slice(lastEnd, m.index)) ||
-        /\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*\s+\d{1,2}:\d{2}\b|\b\d{4}-\d{2}-\d{2}\b/.test(after))) {
-      warnings.push(`"${m[0]}" points at another time ("${after.trim().slice(0, 30)}") -- a later row, not a call to send now`);
+    // "then re-run QuarterlyGateCheck(Q7) Tue 08:00", "then at 08:00 X", "then after the hold X":
+    // a later row, not a second call now.
+    const lead = text.slice(lastEnd, m.index);
+    if (accepted.length > 0 && (/\b(re-?run|retry|later|tomorrow|after|once|when|until|at)\b/i.test(lead) || TIME.test(lead) || TIME.test(clause))) {
+      warnings.push(`"${m[0]}" points at another time ("${(lead + m[0] + clause).trim().slice(0, 50)}") -- a later row, not a call to send now`);
       continue;
     }
     accepted.push(m);
