@@ -856,3 +856,39 @@ describe('QA round 4', () => {
     assert.match(r.alerts.alerts[0].title, /did not do what the plan expected/);
   });
 });
+
+describe('QA round 5', () => {
+  it('a step already alerted as missed is not later alerted "outcome unknown" because some other message is pending', async () => {
+    const ledger = new Map();
+    const state = { has: (k) => ledger.has(k), add: (k) => ledger.set(k, true) };
+    const s = schedule(entry({ id: '79', notBefore: '2026-10-05T20:00:00Z', notAfter: '2026-10-05T20:45:00Z' }));
+    const chain = new FakeChain({ at: '2026-10-05T20:50:00Z' });
+    const go = async (t) => {
+      const h = harness();
+      chain.headNumber = epochOf(t);
+      return { ...(await runRehearsal({ schedule: s, targets: TARGETS, chain, cranker: CRANKER, nowMs: ms(t), dryRun: false,
+        pause: { paused: false, reason: null }, gasLimit: 100_000_000n, reportWindowMs: 30 * 60_000, confirmations: 1, alerts: h.alerts, log: h.log, alertState: state })), ...h };
+    };
+    const r1 = await go('2026-10-05T20:50:00Z');
+    assert.deepEqual(r1.alerts.alerts.map((a) => a.title), ['Rehearsal step 79 was not sent']);
+    chain.pendingExtra = 1; // a later step's message, say
+    const r2 = await go('2026-10-05T21:05:00Z');
+    assert.deepEqual(r2.alerts.alerts, []);
+    assert.equal(r2.exitCode, 0);
+  });
+
+  it('closed windows are looked at for one report window only, so an old row cannot hold a current send', async () => {
+    const s = schedule(
+      entry({ id: '70', notBefore: '2026-10-05T19:00:00Z', notAfter: '2026-10-05T19:45:00Z' }),
+      entry({ id: '71', gateQuarter: 7, notBefore: '2026-10-05T21:00:00Z', notAfter: '2026-10-05T21:45:00Z' }),
+    );
+    const chain = new FakeChain({ at: '2026-10-05T21:01:00Z', respond: gatePass(7) });
+    chain.sentEarlier('2026-10-05T19:01:00Z', s.entries[0], { status: 1 }, tagGasLimit(100_000_000n, '70'));
+    chain.receiptOf = async () => null; // row 70's receipt is unreadable
+    const h = harness();
+    const r = await runRehearsal({ schedule: s, targets: TARGETS, chain, cranker: CRANKER, nowMs: ms('2026-10-05T21:01:00Z'), dryRun: false,
+      pause: { paused: false, reason: null }, gasLimit: 100_000_000n, reportWindowMs: 30 * 60_000, confirmations: 1, alerts: h.alerts, log: h.log,
+      alertState: { has: () => false, add: () => {} } });
+    assert.deepEqual(r.actions.map((a) => [a.id, a.decision]), [['71', 'sent']]);
+  });
+});

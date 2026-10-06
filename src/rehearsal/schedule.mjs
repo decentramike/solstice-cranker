@@ -327,7 +327,9 @@ export function parseActionCalls(actionText, watchText = '') {
     // a later row, not a second call now.
     const lead = text.slice(lastEnd, m.index);
     const ELSEWHEN = /\b(re-?run|retry|later|tomorrow|after|once|when|until|at|wait|next|morning|evening|night)\b|\bin\s+\d+\s*(h|hrs?|hours?|m|mins?|minutes?)\b/i;
-    if (accepted.length > 0 && (ELSEWHEN.test(lead) || TIME.test(lead) || TIME.test(clause) || ELSEWHEN.test(clause.split(',')[0]))) {
+    // After the call itself only unmistakable time words count: "PASS at weight 40%" is an outcome.
+    const LATER = /\b(re-?run|later|tomorrow|next\s+(morning|evening|day|run)|morning|evening|overnight)\b|\bin\s+\d+\s*(h|hrs?|hours?|m|mins?|minutes?)\b/i;
+    if (accepted.length > 0 && (ELSEWHEN.test(lead) || TIME.test(lead) || TIME.test(clause) || LATER.test(clause.split(',')[0]))) {
       warnings.push(`"${m[0]}" points at another time ("${(lead + m[0] + clause).trim().slice(0, 50)}") -- a later row, not a call to send now`);
       continue;
     }

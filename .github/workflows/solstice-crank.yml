@@ -144,9 +144,10 @@ jobs:
           # Blank = filecoin-project/solstice's deployments.json at the commit abi/ was built from:
           # the source of the addresses rehearsal mode sends to.
           SOLSTICE_DEPLOYMENTS: ${{ vars.SOLSTICE_DEPLOYMENTS }}
-          # Blank = 30. Used only when the alert ledger below is missing: alerts then fire on runs
-          # inside this many minutes of a problem starting, so keep it at about twice the trigger
-          # interval. Blank gas = 100,000,000 for sends without a pre-check.
+          # Blank = 30 (minutes): how long a closed window is still checked, how long a step may be
+          # held by a pending message before that is alerted, and -- with no alert ledger -- the
+          # window alerts fire in. About twice the trigger interval. Blank gas = 100,000,000 for
+          # sends without a pre-check. Set CRANK_MODE to exactly "rehearsal".
           CRANK_REHEARSAL_REPORT_MINUTES: ${{ vars.CRANK_REHEARSAL_REPORT_MINUTES }}
           CRANK_REHEARSAL_GAS_LIMIT: ${{ vars.CRANK_REHEARSAL_GAS_LIMIT }}
 

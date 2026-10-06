@@ -61,9 +61,6 @@ const MAX_NULL_WALK = 2880;
 /** With an alert ledger, a problem is still alerted on the first run that sees it up to a day late. */
 const ALERT_HORIZON_MS = 24 * 3_600_000;
 
-/** With an alert ledger, a closed window is still checked -- and a miss alerted -- this long after. */
-const CLOSED_LOOKBACK_MS = 2 * 3_600_000;
-
 /** After a dropped receipt wait: ask again this many times, this far apart. */
 const RECEIPT_POLLS = 6;
 const RECEIPT_POLL_MS = Number(process.env.CRANK_RECEIPT_POLL_MS || 10_000);
@@ -633,8 +630,9 @@ export async function runRehearsal(p) {
   const eligible = live.filter(inWindow);
   const chainBehind = live.filter((e) => e.notBeforeMs <= nowMs && e.notBeforeMs > chainMs && nowMs < e.notAfterMs);
   const closing = live.filter((e) => e.notBeforeMs <= openUntilMs && !inWindow(e) && nowMs < e.notAfterMs);
-  const closedHorizonMs = p.alertState ? Math.max(reportWindowMs, CLOSED_LOOKBACK_MS) : reportWindowMs;
-  const justClosed = live.filter((e) => e.notAfterMs <= nowMs && nowMs < e.notAfterMs + closedHorizonMs);
+  // Closed windows are looked at for one report window only. Looking further back would widen the
+  // scan the send decisions rely on, so a problem reading an old row could hold a current send.
+  const justClosed = live.filter((e) => e.notAfterMs <= nowMs && nowMs < e.notAfterMs + reportWindowMs);
   const upcoming = live.filter((e) => e.notBeforeMs > nowMs);
 
   for (const e of chainBehind) {
@@ -739,7 +737,14 @@ export async function runRehearsal(p) {
       // "Send it by hand" would then be the wrong advice: it could spend a later step's check.
       const r = record({ ...base(e), decision: 'held', epoch: head.number, result: 'window closed; outcome not yet known',
         message: inFlight ? 'a cranker message is still pending; the next run will know' : 'a send in its window may have been this step' }, 'warn');
-      if (cranker && ledger.complete) {
+      // Not after the row was already reported missed: a message pending now is a later step's.
+      let reportedMissed = false;
+      try {
+        reportedMissed = Boolean(p.alertState?.has(`Rehearsal step ${e.id} was not sent@${new Date(e.notAfterMs).toISOString()}`));
+      } catch {
+        // the ledger is for alerts only
+      }
+      if (cranker && ledger.complete && !reportedMissed) {
         flagOnce(e.notAfterMs, r, `Rehearsal step ${e.id}: window closed, outcome unknown`,
           `${r.message}. Check the cranker address on an explorer before any manual send: ` +
             'a second message could use up a later step\'s check.');

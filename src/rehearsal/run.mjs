@@ -40,7 +40,9 @@ export function openAlertLedger(file, nowMs) {
     // first run, evicted cache, corrupt file, or no ledger at all
   }
   for (const [k, at] of Object.entries(keys)) {
-    if (nowMs - Date.parse(at) > LEDGER_DAYS * 86_400_000) delete keys[k];
+    const age = nowMs - Date.parse(at);
+    // Older than a week, or dated in the future (which only a hand-edited file could be).
+    if (age > LEDGER_DAYS * 86_400_000 || age < -86_400_000) delete keys[k];
   }
   const pending = new Map(); // key -> alert title
   const titleOf = (k) => (k.lastIndexOf('@') > 0 ? k.slice(0, k.lastIndexOf('@')) : k);

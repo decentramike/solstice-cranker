@@ -325,7 +325,9 @@ in the Actions cache: the keys of the alerts already sent. It holds alerts only;
 reads it, so it cannot make the cranker send or skip anything. If the cache entry is missing
 (the first run, or evicted after a week unused), alerts fall back to the runs inside
 `CRANK_REHEARSAL_REPORT_MINUTES` (default 30, about twice the trigger interval) of the moment a
-problem starts. That fallback can repeat an alert but does not drop one. A dry run never alerts.
+problem starts. That fallback can repeat an alert but does not drop one. A step missed while every run in the 30
+minutes after its window closed was dropped is not alerted; the watchdog still sees an overdue
+crank. A dry run never alerts.
 
 ### Updating the schedule when the runbook changes
 
