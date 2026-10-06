@@ -101,10 +101,10 @@ export async function readChainGeometry(sra) {
   return { activationEpoch: BigInt(activationEpoch), epochsPerQuarter: BigInt(epochsPerQuarter) };
 }
 
-/** Reads one 32-byte word at `slot + index`. */
-async function readWord(provider, address, slot, index) {
+/** Reads one 32-byte word at `slot + index`, at `blockTag` (default: latest). */
+async function readWord(provider, address, slot, index, blockTag = 'latest') {
   const target = '0x' + (BigInt(slot) + BigInt(index)).toString(16).padStart(64, '0');
-  const raw = await withRetry(() => provider.getStorage(address, target), { what: 'eth_getStorageAt' });
+  const raw = await withRetry(() => provider.getStorage(address, target, blockTag), { what: 'eth_getStorageAt' });
   return BigInt(raw);
 }
 
@@ -140,13 +140,13 @@ export async function readSraQuarterState(provider, sraAddress) {
  * member always starts a fresh slot, so: word 0 lastCheckedQuarter, word 1 base,
  * word 2 stepRatio, word 3 steps.
  */
-export async function readSwaGateState(provider, swaAddress) {
+export async function readSwaGateState(provider, swaAddress, blockTag = 'latest') {
   const { slot } = STORAGE_SLOTS.swaGateParams;
   const [w0, base, stepRatio, w3] = await Promise.all([
-    readWord(provider, swaAddress, slot, 0),
-    readWord(provider, swaAddress, slot, 1),
-    readWord(provider, swaAddress, slot, 2),
-    readWord(provider, swaAddress, slot, 3),
+    readWord(provider, swaAddress, slot, 0, blockTag),
+    readWord(provider, swaAddress, slot, 1, blockTag),
+    readWord(provider, swaAddress, slot, 2, blockTag),
+    readWord(provider, swaAddress, slot, 3, blockTag),
   ]);
 
   const steps = unpack(w3, 0, 8);

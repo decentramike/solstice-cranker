@@ -106,6 +106,16 @@ jobs:
         # The cranker's only runtime dependency is ethers v6.
         run: npm ci --omit=dev
 
+      - name: Restore the rehearsal alert ledger
+        # Which rehearsal alerts have already gone out, so each is sent once. Alerts only: every send
+        # decision is made from the chain. Absent (first run, evicted), alerts fall back to a time
+        # window. Production mode never writes it.
+        uses: actions/cache/restore@v4
+        with:
+          path: .crank-state
+          key: crank-alerts-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: crank-alerts-
+
       - name: Crank
         env:
           # --- required ---
@@ -126,6 +136,20 @@ jobs:
           CRANK_DISABLED_DAYS: ${{ vars.CRANK_DISABLED_DAYS }}
           CRANK_PAUSED_WINDOWS: ${{ vars.CRANK_PAUSED_WINDOWS }}
           CRANK_DISABLED_WEEKDAYS: ${{ vars.CRANK_DISABLED_WEEKDAYS }}
+
+          # --- mode; see docs/RUNBOOK.md, "Rehearsal mode" ---
+          # Blank = production. "rehearsal" sends only what config/rehearsal-schedule.json lists,
+          # at its times, and refuses to start on any chain but calibnet.
+          CRANK_MODE: ${{ vars.CRANK_MODE }}
+          # Blank = filecoin-project/solstice's deployments.json at the commit abi/ was built from:
+          # the source of the addresses rehearsal mode sends to.
+          SOLSTICE_DEPLOYMENTS: ${{ vars.SOLSTICE_DEPLOYMENTS }}
+          # Blank = 30 (minutes): how long a closed window is still checked, how long a step may be
+          # held by a pending message before that is alerted, and -- with no alert ledger -- the
+          # window alerts fire in. About twice the trigger interval. Blank gas = 100,000,000 for
+          # sends without a pre-check. Set CRANK_MODE to exactly "rehearsal".
+          CRANK_REHEARSAL_REPORT_MINUTES: ${{ vars.CRANK_REHEARSAL_REPORT_MINUTES }}
+          CRANK_REHEARSAL_GAS_LIMIT: ${{ vars.CRANK_REHEARSAL_GAS_LIMIT }}
 
           # --- behaviour ---
           CRANK_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
@@ -153,6 +177,14 @@ jobs:
           else
             node scripts/crank.mjs
           fi
+
+      - name: Save the rehearsal alert ledger
+        # Rehearsal runs that could send only; anything else would just re-save the same file.
+        if: always() && vars.CRANK_MODE == 'rehearsal' && !inputs.dry_run && hashFiles('.crank-state/alerted.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .crank-state
+          key: crank-alerts-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Point at the runbook on failure
         if: failure()

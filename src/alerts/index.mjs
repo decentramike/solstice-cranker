@@ -156,15 +156,15 @@ export class AlertSink {
         const transport = TRANSPORTS[name];
         if (!transport) {
           log.warn('unknown alert transport, skipping', { transport: name });
-          results.push({ transport: name, ok: false, error: 'unknown transport' });
+          results.push({ transport: name, ok: false, error: 'unknown transport', title: alert.title });
           continue;
         }
         try {
-          results.push(await transport(alert, this.config));
+          results.push({ ...(await transport(alert, this.config)), transport: name, title: alert.title });
         } catch (err) {
           // Reported, never rethrown -- see the note at the top of this file.
           log.error('alert delivery failed', { transport: name, error: err.message });
-          results.push({ transport: name, ok: false, error: err.message });
+          results.push({ transport: name, ok: false, error: err.message, title: alert.title });
           if (name !== 'console') await sendConsole(alert).catch(() => {});
         }
       }

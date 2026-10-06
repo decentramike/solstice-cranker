@@ -5,7 +5,7 @@
  * goes out. A misconfigured run should fail on the first line with a sentence that says
  * what to fix, not three calls later with a decoding error.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAddress, getAddress, parseEther } from 'ethers';
@@ -85,17 +85,31 @@ function utcWeekday(date) {
   return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][date.getUTCDay()];
 }
 
+/** The pause file. Relative paths resolve against the repository root, where Actions runs. */
+export function pauseFilePath(env) {
+  return resolve(ROOT, env.CRANK_PAUSE_FILE ?? 'PAUSED');
+}
+
 /**
  * Decides whether this run is allowed to broadcast.
  *
  * Pausing exists for the rehearsal: quarters 5 and 6 fall on a weekend and deliberately
  * test what happens when nobody cranks. A paused run still reads chain state and reports,
  * so the logs stay continuous -- it just sends nothing.
+ *
+ * Two switches stop every automatic send, in either mode: the CRANK_PAUSED variable, and a file
+ * named PAUSED at the repository root (CRANK_PAUSE_FILE moves it). The variable is the quick one;
+ * the file travels with a commit, so a branch or a PR can carry its own pause. A person pressing
+ * Run workflow with force_call still sends: that is deliberate, and scripts/crank-force.mjs says so.
  */
 export function resolvePause(now = new Date(), rawEnv = process.env) {
   const env = withoutBlanks(rawEnv);
   if (truthy(env.CRANK_PAUSED)) {
     return { paused: true, reason: 'CRANK_PAUSED is set' };
+  }
+  const file = pauseFilePath(env);
+  if (existsSync(file)) {
+    return { paused: true, reason: `pause file ${file} exists` };
   }
 
   // Exact-instant windows, for when a whole calendar day is the wrong shape. The rehearsal
@@ -147,6 +161,37 @@ function withoutBlanks(env) {
     if (v !== '') out[k] = v;
   }
   return out;
+}
+
+/**
+ * Just enough configuration to send an alert: the ALERT_* variables, the network name and the run
+ * link. Validates nothing else, so a run whose full configuration is broken -- a malformed key, a
+ * mistyped mode -- can still say so (scripts/crank.mjs).
+ */
+export function loadAlertConfig(rawEnv = process.env) {
+  const env = withoutBlanks(rawEnv);
+  const networkName = env.NETWORK ?? 'calibnet';
+  return {
+    networkName,
+    chainId: BigInt(NETWORKS[networkName]?.chainId ?? 0),
+    rpcUrl: env.RPC_URL ?? NETWORKS[networkName]?.rpcUrl ?? null,
+    alerts: alertSettings(env),
+    runUrl:
+      env.GITHUB_SERVER_URL && env.GITHUB_REPOSITORY && env.GITHUB_RUN_ID
+        ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`
+        : null,
+  };
+}
+
+function alertSettings(env) {
+  return {
+    transports: (env.ALERT_TRANSPORT ?? 'console').split(',').map((s) => s.trim()).filter(Boolean),
+    to: env.ALERT_EMAIL_TO ?? null,
+    from: env.ALERT_EMAIL_FROM ?? 'cranker@fil.org',
+    sendgridKey: env.SENDGRID_API_KEY ?? null,
+    resendKey: env.RESEND_API_KEY ?? null,
+    webhookUrl: env.ALERT_WEBHOOK_URL ?? null,
+  };
 }
 
 /**
@@ -217,6 +262,30 @@ export function loadConfig(rawEnv = process.env, { requireKey = true } = {}) {
   // first line with a sentence that says what to fix -- not mid-run, after state was read.
   parsePauseWindows(env.CRANK_PAUSED_WINDOWS);
 
+  // Production decides for itself; rehearsal sends exactly what config/rehearsal-schedule.json lists.
+  const mode = (env.CRANK_MODE ?? 'production').trim().toLowerCase();
+  if (!['production', 'rehearsal'].includes(mode)) {
+    throw new ConfigError(`CRANK_MODE "${env.CRANK_MODE}" is not production or rehearsal`);
+  }
+  // Checked only when they are used: a typo in a rehearsal-only variable must not stop production.
+  let rehearsalGasLimit = 100_000_000n;
+  let reportWindowMinutes = 30;
+  if (mode === 'rehearsal') {
+    try {
+      rehearsalGasLimit = BigInt(env.CRANK_REHEARSAL_GAS_LIMIT ?? 100_000_000);
+    } catch {
+      throw new ConfigError(`CRANK_REHEARSAL_GAS_LIMIT is not an integer: ${env.CRANK_REHEARSAL_GAS_LIMIT}`);
+    }
+    if (rehearsalGasLimit < 21_000n) throw new ConfigError('CRANK_REHEARSAL_GAS_LIMIT must be at least 21000');
+    // A problem is alerted on runs inside this window. About twice the trigger interval: a run that
+    // starts late must not leave a window with no run in it, and an occasional second alert is the
+    // cheaper failure. 30 suits the 15-minute cron-job.org trigger.
+    reportWindowMinutes = Number(env.CRANK_REHEARSAL_REPORT_MINUTES ?? 30);
+    if (!Number.isFinite(reportWindowMinutes) || reportWindowMinutes < 1) {
+      throw new ConfigError('CRANK_REHEARSAL_REPORT_MINUTES must be a positive number');
+    }
+  }
+
   const maxGateCatchup = Number(env.CRANK_MAX_GATE_CATCHUP ?? 8);
   if (!Number.isInteger(maxGateCatchup) || maxGateCatchup < 1 || maxGateCatchup > 64) {
     throw new ConfigError('CRANK_MAX_GATE_CATCHUP must be an integer between 1 and 64');
@@ -251,16 +320,16 @@ export function loadConfig(rawEnv = process.env, { requireKey = true } = {}) {
     targetQuarter,
 
     dryRun: truthy(env.CRANK_DRY_RUN),
+    mode,
+    rehearsal: {
+      scheduleFile: resolve(ROOT, env.CRANK_SCHEDULE_FILE ?? 'config/rehearsal-schedule.json'),
+      deploymentsSource: env.SOLSTICE_DEPLOYMENTS ?? null,
+      gasLimit: rehearsalGasLimit,
+      reportWindowMinutes,
+    },
     stateDir: env.CRANK_STATE_DIR ? resolve(env.CRANK_STATE_DIR) : null,
 
-    alerts: {
-      transports: (env.ALERT_TRANSPORT ?? 'console').split(',').map((s) => s.trim()).filter(Boolean),
-      to: env.ALERT_EMAIL_TO ?? null,
-      from: env.ALERT_EMAIL_FROM ?? 'cranker@fil.org',
-      sendgridKey: env.SENDGRID_API_KEY ?? null,
-      resendKey: env.RESEND_API_KEY ?? null,
-      webhookUrl: env.ALERT_WEBHOOK_URL ?? null,
-    },
+    alerts: alertSettings(env),
 
     runUrl:
       env.GITHUB_SERVER_URL && env.GITHUB_REPOSITORY && env.GITHUB_RUN_ID
@@ -280,6 +349,7 @@ export function describeConfig(config) {
     deployed: config.deployed,
     dryRun: config.dryRun,
     targetQuarter: config.targetQuarter ?? '(auto)',
+    mode: config.mode,
     alertTransports: config.alerts.transports.join(','),
   };
 }

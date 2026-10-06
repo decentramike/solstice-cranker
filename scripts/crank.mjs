@@ -5,7 +5,7 @@
  * Exit 0 means the run is healthy: either the cranks landed, or they were correctly not
  * due. Exit 1 means something needs a person, and an alert has already gone out.
  */
-import { loadConfig, describeConfig, redactRpcUrl } from '../src/config.mjs';
+import { loadAlertConfig, loadConfig, describeConfig, redactRpcUrl } from '../src/config.mjs';
 import { runCrank } from '../src/crank.mjs';
 import { log, writeJobSummary } from '../src/logger.mjs';
 
@@ -35,6 +35,31 @@ function summarise(record) {
   ].join('\n');
 }
 
+/**
+ * A run that cannot even load its configuration still exits 1, so it still has to tell someone:
+ * a deleted CRANKER_PRIVATE_KEY secret or a mistyped variable otherwise shows only as a red run
+ * nobody is watching. The alert settings need no key, so they are loaded on their own. If they
+ * cannot be loaded either, the log line above is all there is.
+ */
+async function alertConfigError(err) {
+  const env = process.env;
+  if (env.CRANK_DRY_RUN && env.CRANK_DRY_RUN !== '0' && (env.CRANK_MODE ?? '').trim().toLowerCase() === 'rehearsal') return;
+  try {
+    const partial = loadAlertConfig(process.env);
+    const { AlertSink } = await import('../src/alerts/index.mjs');
+    const sink = new AlertSink(partial);
+    sink.raise({
+      severity: 'critical',
+      title: `Solstice cranker could not start on ${partial.networkName}`,
+      body: `${redactRpcUrl(err.message, partial.rpcUrl)}\n\nNothing was sent. Fix the repository secret or variable named above.`,
+      context: { epoch: '—', cranker: '—', balanceFil: '—' },
+    });
+    await sink.flush({ minSeverity: 'warn' });
+  } catch {
+    // The configuration is broken beyond the key; the log line is the only signal.
+  }
+}
+
 async function main() {
   let config;
   try {
@@ -43,8 +68,9 @@ async function main() {
     // CI -- which is the order you want to do it in.
     config = loadConfig(process.env, { requireKey: !process.env.CRANK_DRY_RUN });
   } catch (err) {
-    log.error(err.message);
+    log.error(redactRpcUrl(err.message, process.env.RPC_URL));
     process.exitCode = 1;
+    await alertConfigError(err);
     return;
   }
 
@@ -52,13 +78,19 @@ async function main() {
   if (config.dryRun) log.warn('CRANK_DRY_RUN is set: simulating only, nothing will be broadcast');
 
   try {
-    const { record, exitCode, alerts } = await runCrank(config);
+    // CRANK_MODE=rehearsal: send exactly what config/rehearsal-schedule.json lists, when it says.
+    // Calibnet only; runRehearsalFromEnv refuses anything else before it touches the node.
+    // Loaded only in rehearsal mode: nothing in it can stop a production run from starting.
+    const rehearsal = config.mode === 'rehearsal' ? await import('../src/rehearsal/run.mjs') : null;
+    const outcome = rehearsal ? await rehearsal.runRehearsalFromEnv(config) : await runCrank(config);
+    const { record, exitCode, alerts } = outcome;
 
     // The run record is the machine-readable output; stdout carries it alone.
-    process.stdout.write(JSON.stringify(record, null, 2) + '\n');
-    writeJobSummary(summarise(record));
+    process.stdout.write(JSON.stringify(record, (k, v) => (typeof v === 'bigint' ? String(v) : v), 2) + '\n');
+    writeJobSummary(rehearsal ? rehearsal.summariseRehearsal(record, config.explorerTxUrl) : summarise(record));
 
-    await alerts.flush({ minSeverity: 'warn' });
+    const delivered = await alerts.flush({ minSeverity: 'warn' });
+    outcome.afterFlush?.(delivered);
 
     log.section(exitCode === 0 ? 'Run healthy' : 'Run failed');
     process.exitCode = exitCode;
@@ -72,6 +104,12 @@ async function main() {
     const stack = redactRpcUrl(err.stack ?? null, config.rpcUrl);
     log.error('crank aborted', { error: message });
     if (stack) log.debug(stack);
+
+    // A rehearsal dry run is a person checking the plan, watching the run; it pages nobody.
+    if (config.dryRun && config.mode === 'rehearsal') {
+      process.exitCode = 1;
+      return;
+    }
 
     try {
       const { AlertSink } = await import('../src/alerts/index.mjs');
