@@ -294,7 +294,7 @@ export function parseActionCalls(actionText, watchText = '') {
   let lastEnd = 0;
   const TIME = /\b\d{1,2}:\d{2}\b|\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*\b|\b\d{4}-\d{2}-\d{2}\b/;
   const NEGATED_AFTER =
-    /^\W*(is|are|was|were|will be|must be|should be)?\s*(not|never)\b|\b(do not|don't|won't|shouldn't|must not|will not|is not|isn't|not)\s+(be\s+)?(send|sent|call|called|run|cranked)\b|\b(skipped|cancel+ed|nobody|no one)\b/i;
+    /^\W*(is|are|was|were|will be|must be|should be)?\s*(not|never)\b|\b(do not|don't|won't|shouldn't|must not|will not|is not|isn't|not)\s+(be\s+)?(send|sent|call|called|run|cranked)\b|\b(skip|skipped|cancel+ed|nobody|no one|no[- ]crank(s|ing)?)\b/i;
   for (const m of found) {
     const before = text.slice(Math.max(0, m.index - 40), m.index);
     const next = found[found.indexOf(m) + 1];
@@ -310,6 +310,10 @@ export function parseActionCalls(actionText, watchText = '') {
     // describes a call, it does not order one -- and then nothing later in that cell is a call either.
     if (accepted.length === 0) {
       const lead = text.slice(0, m.index).trim();
+      if (/\b(if|unless|when|whenever|once|after|wait|until)\b/i.test(lead)) {
+        warnings.push(`"${m[0]}" follows a condition ("${lead.slice(-40)}") -- this row is read as a description, and nothing in it is sent`);
+        return { calls: [], warnings };
+      }
       if (lead !== '' && !/^(send|call|run|crank)$/i.test(lead) && !/\bthen\b/i.test(lead)) {
         warnings.push(`"${m[0]}" does not open the cell and is not introduced with "then" -- this row is read as a description, and nothing in it is sent`);
         return { calls: [], warnings };
@@ -322,7 +326,8 @@ export function parseActionCalls(actionText, watchText = '') {
     // "then re-run QuarterlyGateCheck(Q7) Tue 08:00", "then at 08:00 X", "then after the hold X":
     // a later row, not a second call now.
     const lead = text.slice(lastEnd, m.index);
-    if (accepted.length > 0 && (/\b(re-?run|retry|later|tomorrow|after|once|when|until|at)\b/i.test(lead) || TIME.test(lead) || TIME.test(clause))) {
+    const ELSEWHEN = /\b(re-?run|retry|later|tomorrow|after|once|when|until|at|wait|next|morning|evening|night)\b|\bin\s+\d+\s*(h|hrs?|hours?|m|mins?|minutes?)\b/i;
+    if (accepted.length > 0 && (ELSEWHEN.test(lead) || TIME.test(lead) || TIME.test(clause) || ELSEWHEN.test(clause.split(',')[0]))) {
       warnings.push(`"${m[0]}" points at another time ("${(lead + m[0] + clause).trim().slice(0, 50)}") -- a later row, not a call to send now`);
       continue;
     }

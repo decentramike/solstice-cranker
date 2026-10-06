@@ -138,6 +138,7 @@ describe('rehearsal mode against a local chain with calibnet\'s chain id', { ski
       RPC_URL: `http://127.0.0.1:${CALIB.port}`,
       CRANKER_PRIVATE_KEY: crankerKey,
       CRANK_MODE: 'rehearsal',
+      CRANK_ALERT_LEDGER: join(tmpdir(), `crank-alert-ledger-${process.pid}.json`), // never the working tree's
       CRANK_SCHEDULE_FILE: scheduleFile,
       SOLSTICE_DEPLOYMENTS: deploymentsFile,
       CRANK_REHEARSAL_GAS_LIMIT: '5000000', // Hardhat caps one transaction at 2^24 gas

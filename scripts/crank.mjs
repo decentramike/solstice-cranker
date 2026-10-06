@@ -82,13 +82,15 @@ async function main() {
     // Calibnet only; runRehearsalFromEnv refuses anything else before it touches the node.
     // Loaded only in rehearsal mode: nothing in it can stop a production run from starting.
     const rehearsal = config.mode === 'rehearsal' ? await import('../src/rehearsal/run.mjs') : null;
-    const { record, exitCode, alerts } = rehearsal ? await rehearsal.runRehearsalFromEnv(config) : await runCrank(config);
+    const outcome = rehearsal ? await rehearsal.runRehearsalFromEnv(config) : await runCrank(config);
+    const { record, exitCode, alerts } = outcome;
 
     // The run record is the machine-readable output; stdout carries it alone.
     process.stdout.write(JSON.stringify(record, (k, v) => (typeof v === 'bigint' ? String(v) : v), 2) + '\n');
     writeJobSummary(rehearsal ? rehearsal.summariseRehearsal(record, config.explorerTxUrl) : summarise(record));
 
-    await alerts.flush({ minSeverity: 'warn' });
+    const delivered = await alerts.flush({ minSeverity: 'warn' });
+    outcome.afterFlush?.(delivered);
 
     log.section(exitCode === 0 ? 'Run healthy' : 'Run failed');
     process.exitCode = exitCode;

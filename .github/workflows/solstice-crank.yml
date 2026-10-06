@@ -144,8 +144,9 @@ jobs:
           # Blank = filecoin-project/solstice's deployments.json at the commit abi/ was built from:
           # the source of the addresses rehearsal mode sends to.
           SOLSTICE_DEPLOYMENTS: ${{ vars.SOLSTICE_DEPLOYMENTS }}
-          # Blank = 15: alerts fire on runs inside this many minutes of a problem starting. Keep it
-          # equal to the trigger interval. Blank gas = 100,000,000 for sends without a pre-check.
+          # Blank = 30. Used only when the alert ledger below is missing: alerts then fire on runs
+          # inside this many minutes of a problem starting, so keep it at about twice the trigger
+          # interval. Blank gas = 100,000,000 for sends without a pre-check.
           CRANK_REHEARSAL_REPORT_MINUTES: ${{ vars.CRANK_REHEARSAL_REPORT_MINUTES }}
           CRANK_REHEARSAL_GAS_LIMIT: ${{ vars.CRANK_REHEARSAL_GAS_LIMIT }}
 
@@ -177,7 +178,8 @@ jobs:
           fi
 
       - name: Save the rehearsal alert ledger
-        if: always() && hashFiles('.crank-state/alerted.json') != ''
+        # Rehearsal runs that could send only; anything else would just re-save the same file.
+        if: always() && vars.CRANK_MODE == 'rehearsal' && !inputs.dry_run && hashFiles('.crank-state/alerted.json') != ''
         uses: actions/cache/save@v4
         with:
           path: .crank-state

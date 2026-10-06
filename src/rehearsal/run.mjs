@@ -23,21 +23,37 @@ const LEDGER_DAYS = 7;
  * comes from the chain. In Actions it lives in .crank-state/, carried from run to run by the cache
  * steps in the workflow; when it is missing the engine falls back to a time window, which can
  * repeat an alert but never drops one it would otherwise send.
+ *
+ * A key raised in a run is only written down once the alert was delivered (commit): if email or
+ * the webhook failed, the next run alerts again rather than staying quiet for good.
  */
 export function openAlertLedger(file, nowMs) {
   let keys = {};
   try {
-    keys = JSON.parse(readFileSync(file, 'utf8')).keys ?? {};
+    const doc = JSON.parse(readFileSync(file, 'utf8'));
+    if (doc && typeof doc.keys === 'object' && doc.keys !== null && !Array.isArray(doc.keys)) {
+      for (const [k, at] of Object.entries(doc.keys)) {
+        if (typeof at === 'string' && !Number.isNaN(Date.parse(at))) keys[k] = at;
+      }
+    }
   } catch {
-    // first run, evicted cache, or no ledger at all
+    // first run, evicted cache, corrupt file, or no ledger at all
   }
   for (const [k, at] of Object.entries(keys)) {
     if (nowMs - Date.parse(at) > LEDGER_DAYS * 86_400_000) delete keys[k];
   }
+  const pending = new Map(); // key -> alert title
+  const titleOf = (k) => (k.lastIndexOf('@') > 0 ? k.slice(0, k.lastIndexOf('@')) : k);
   return {
-    has: (k) => k in keys,
+    has: (k) => Object.hasOwn(keys, k) || pending.has(k),
     add: (k) => {
-      keys[k] = new Date(nowMs).toISOString();
+      pending.set(k, titleOf(k));
+    },
+    /** Keeps the keys whose alerts reached every transport that is not just the console. */
+    commit(results = []) {
+      const failed = new Set(results.filter((r) => !r.ok && r.transport !== 'console').map((r) => r.title));
+      for (const [k, title] of pending) if (!failed.has(title)) keys[k] = new Date(nowMs).toISOString();
+      pending.clear();
     },
     save() {
       try {
@@ -112,8 +128,6 @@ export async function runRehearsalFromEnv(config, { now = () => Date.now() } = {
     log,
   });
 
-  alertState?.save();
-
   let balanceFil = null;
   if (address) {
     try {
@@ -149,7 +163,13 @@ export async function runRehearsalFromEnv(config, { now = () => Date.now() } = {
     needsPerson: result.needsPerson,
     exitCode: result.exitCode,
   };
-  return { record, exitCode: result.exitCode, alerts };
+  // The caller flushes the alerts, then calls this: only delivered alerts are written down.
+  const afterFlush = (results) => {
+    if (!alertState) return;
+    alertState.commit(results);
+    alertState.save();
+  };
+  return { record, exitCode: result.exitCode, alerts, afterFlush };
 }
 
 /** The Actions job summary for a rehearsal run. */
@@ -174,7 +194,7 @@ export function summariseRehearsal(record, explorerTxUrl) {
       : record.actions.some((a) => a.match === false)
         ? '**A step on the record did not match the plan.** It was alerted by the run that sent it; see the table.'
         : record.actions.some((a) => ['blocked', 'held', 'missed', 'too-late', 'failed'].includes(a.decision))
-          ? '**A step is held or was not sent** (already alerted). See the table.'
+          ? '**A step is held or was not sent.** See the table and the alerts.'
           : '**Healthy.**',
   ].join('\n');
 }

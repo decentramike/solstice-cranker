@@ -106,6 +106,7 @@ describe('QA3: a runner killed between broadcast and receipt, on a local calibne
     return {
       PATH: process.env.PATH, HOME: process.env.HOME,
       NETWORK: 'calibnet', RPC_URL: RPC, CRANKER_PRIVATE_KEY: crankerKey, CRANK_MODE: 'rehearsal',
+      CRANK_ALERT_LEDGER: join(tmpdir(), `crank-alert-ledger-${process.pid}.json`), // never the working tree's
       CRANK_SCHEDULE_FILE: scheduleFile, SOLSTICE_DEPLOYMENTS: deployments, CRANK_REHEARSAL_GAS_LIMIT: '5000000',
       CRANK_PAUSE_FILE: join(tmp, 'PAUSED'), CRANK_CONFIRMATIONS: '1', ALERT_TRANSPORT: 'console',
       QA3_NOW_OFFSET_MS: String(offsetMs),

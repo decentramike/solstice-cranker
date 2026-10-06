@@ -61,6 +61,9 @@ const MAX_NULL_WALK = 2880;
 /** With an alert ledger, a problem is still alerted on the first run that sees it up to a day late. */
 const ALERT_HORIZON_MS = 24 * 3_600_000;
 
+/** With an alert ledger, a closed window is still checked -- and a miss alerted -- this long after. */
+const CLOSED_LOOKBACK_MS = 2 * 3_600_000;
+
 /** After a dropped receipt wait: ask again this many times, this far apart. */
 const RECEIPT_POLLS = 6;
 const RECEIPT_POLL_MS = Number(process.env.CRANK_RECEIPT_POLL_MS || 10_000);
@@ -604,10 +607,18 @@ export async function runRehearsal(p) {
     const state = p.alertState;
     if (state) {
       const k = `${title}@${new Date(anchorMs).toISOString()}`;
-      if (state.has(k) || nowMs >= anchorMs + ALERT_HORIZON_MS) return;
-      state.add(k);
-      flag(a, title, body);
-      return;
+      let seen;
+      try {
+        seen = state.has(k);
+        if (!seen && nowMs < anchorMs + ALERT_HORIZON_MS) state.add(k);
+      } catch {
+        seen = undefined; // a broken ledger must never stop a run: fall back to the time window
+      }
+      if (seen === false) {
+        if (nowMs < anchorMs + ALERT_HORIZON_MS) flag(a, title, body);
+        return;
+      }
+      if (seen === true) return;
     }
     if (nowMs < anchorMs + reportWindowMs) flag(a, title, body);
   };
@@ -622,7 +633,8 @@ export async function runRehearsal(p) {
   const eligible = live.filter(inWindow);
   const chainBehind = live.filter((e) => e.notBeforeMs <= nowMs && e.notBeforeMs > chainMs && nowMs < e.notAfterMs);
   const closing = live.filter((e) => e.notBeforeMs <= openUntilMs && !inWindow(e) && nowMs < e.notAfterMs);
-  const justClosed = live.filter((e) => e.notAfterMs <= nowMs && nowMs < e.notAfterMs + reportWindowMs);
+  const closedHorizonMs = p.alertState ? Math.max(reportWindowMs, CLOSED_LOOKBACK_MS) : reportWindowMs;
+  const justClosed = live.filter((e) => e.notAfterMs <= nowMs && nowMs < e.notAfterMs + closedHorizonMs);
   const upcoming = live.filter((e) => e.notBeforeMs > nowMs);
 
   for (const e of chainBehind) {
@@ -698,12 +710,40 @@ export async function runRehearsal(p) {
   }
 
   for (const e of justClosed) {
-    if (sentFor.has(e.id)) continue;
+    const sent = sentFor.get(e.id);
+    if (sent) {
+      // A message that landed as its window closed -- it sat in the mpool -- was never checked by
+      // the run that sent it. Check it now.
+      if (sent.timestamp * 1000 >= e.notAfterMs - SEND_MARGIN_MS) {
+        const r = { ...base(e), decision: 'already-sent', txHash: sent.hash, epoch: sent.blockNumber, result: 'sent earlier',
+          message: 'landed as its window closed' };
+        try {
+          const receipt = sent.receipt ?? (await chain.receiptOf(sent.hash));
+          if (receipt) {
+            const o = await readOutcome({ chain, entry: e, req: { to: sent.to, data: sent.data, gasLimit: sent.gasLimit }, receipt, targets });
+            Object.assign(r, { result: describeOutcome(o), match: matches(e, o) });
+          }
+        } catch {
+          // the record says "sent earlier"; the outcome is on any explorer
+        }
+        record(r, r.match === false ? 'warn' : 'info');
+        if (r.match === false) {
+          flagOnce(sent.timestamp * 1000, r, `Rehearsal step ${e.id} did not do what the plan expected`,
+            `${r.call} (tx ${sent.hash}, epoch ${sent.blockNumber}) expected ${e.expect}; the chain says ${r.result}.`);
+        }
+      }
+      continue;
+    }
     if (inFlight || ambiguous.has(e.id)) {
       // Its message may be in the mpool, or may be someone else's send we could not attribute.
       // "Send it by hand" would then be the wrong advice: it could spend a later step's check.
-      record({ ...base(e), decision: 'held', epoch: head.number, result: 'window closed; outcome not yet known',
+      const r = record({ ...base(e), decision: 'held', epoch: head.number, result: 'window closed; outcome not yet known',
         message: inFlight ? 'a cranker message is still pending; the next run will know' : 'a send in its window may have been this step' }, 'warn');
+      if (cranker && ledger.complete) {
+        flagOnce(e.notAfterMs, r, `Rehearsal step ${e.id}: window closed, outcome unknown`,
+          `${r.message}. Check the cranker address on an explorer before any manual send: ` +
+            'a second message could use up a later step\'s check.');
+      }
       continue;
     }
     const a = record({ ...base(e), decision: 'missed', epoch: head.number, result: 'never sent',
@@ -914,7 +954,11 @@ export async function runRehearsal(p) {
       const title = `Rehearsal step ${e.id} did not do what the plan expected`;
       const body = `${r.call} was sent as scheduled (tx ${tx.hash}, epoch ${o.epoch}). The plan expected ${e.expect}; ` +
         `the chain says ${describeOutcome(o)}.`;
-      if (p.alertState) p.alertState.add(`${title}@${new Date(landedMs).toISOString()}`);
+      try {
+        p.alertState?.add(`${title}@${new Date(landedMs).toISOString()}`);
+      } catch {
+        // the ledger is for alerts only; a broken one changes nothing here
+      }
       flag(r, title, body);
     }
   }

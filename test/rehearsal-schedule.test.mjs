@@ -193,3 +193,32 @@ describe('contract addresses come from deployments.json', () => {
 
   it('cleans up', () => rmSync(dir, { recursive: true, force: true }));
 });
+
+describe('QA round 4: phrases that are not calls to send now', () => {
+  it('skips, no-crank notes, conditions, and later times are left out with a warning', () => {
+    for (const text of [
+      'SubmitShares(Q5) -- skip (no-crank weekend)',
+      'SubmitShares(Q5): no crank this weekend',
+      'If the gate passed, then QuarterlyGateCheck(Q8)',
+    ]) {
+      const r = parseActionCalls(text);
+      assert.deepEqual(r.calls, [], text);
+      assert.ok(r.warnings.length > 0, text);
+    }
+    for (const text of [
+      'SubmitShares(Q7); then QuarterlyGateCheck(Q7) next morning',
+      'SubmitShares(Q7), then wait for the hold, then QuarterlyGateCheck(Q7)',
+      'SubmitShares(Q7), then in 6 h QuarterlyGateCheck(Q7)',
+    ]) {
+      const r = parseActionCalls(text);
+      assert.deepEqual(r.calls.map((c) => c.function), ['submitShares'], text);
+      assert.ok(r.warnings.some((w) => /later row/.test(w)), text);
+    }
+  });
+
+  it('the rows the runbook actually uses still parse', () => {
+    assert.deepEqual(parseActionCalls('SubmitShares(Q8), then QuarterlyGateCheck(Q8), PASS, weight 40%').calls.map((c) => c.function), ['submitShares', 'quarterlyGateCheck']);
+    assert.equal(parseActionCalls('QuarterlyGateCheck(Q5), revert, the temporary stream leaves no headroom').calls.length, 1);
+    assert.equal(parseActionCalls('QuarterlyGateCheck(Q11), revert StepsComplete(), the 8 steps are taken; the volume is not read').calls[0].expect, 'revert:StepsComplete');
+  });
+});

@@ -679,7 +679,9 @@ describe('QA round 3', () => {
     chain.pendingExtra = 1;
     const r1 = await run(chain, schedule(e), { now: '2026-10-05T23:01:00Z' });
     assert.deepEqual(r1.actions.map((a) => a.decision), ['held']);
-    assert.deepEqual(r1.alerts.alerts, []);
+    // One alert: outcome unknown -- check before any manual send. Never "send it by hand".
+    assert.deepEqual(r1.alerts.alerts.map((a) => a.title), ['Rehearsal step 78: window closed, outcome unknown']);
+    assert.doesNotMatch(r1.alerts.alerts[0].body, /send it by hand/);
     chain.pendingExtra = 0;
     chain.sentEarlier('2026-10-05T23:06:00Z', s78(), { status: 1, gate: { quarter: 7, passed: true, steps: 5 } }, tagGasLimit(100_000_000n, '78'));
     chain.headNumber = epochOf('2026-10-05T23:08:00Z');
@@ -783,17 +785,74 @@ describe('the alert ledger', () => {
       const file = join(dir, 'sub', 'alerted.json');
       const now = Date.parse('2026-10-09T00:00:00Z');
       const a = openAlertLedger(file, now); // missing: starts empty
-      a.add('old');
+      a.add('old@x');
+      a.commit([]);
       a.save();
       const b = openAlertLedger(file, now + 8 * 86_400_000); // eight days later: pruned
-      assert.equal(b.has('old'), false);
-      b.add('new');
+      assert.equal(b.has('old@x'), false);
+      b.add('new@x');
+      b.commit([{ transport: 'console', ok: true, title: 'new' }]);
       b.save();
-      assert.equal(openAlertLedger(file, now + 8 * 86_400_000).has('new'), true);
+      assert.equal(openAlertLedger(file, now + 8 * 86_400_000).has('new@x'), true);
       writeFileSync(file, '{broken');
-      assert.equal(openAlertLedger(file, now).has('new'), false);
+      assert.equal(openAlertLedger(file, now).has('new@x'), false);
+      writeFileSync(file, '{"keys":"x"}'); // a tampered file: ignored, never a crash
+      assert.equal(openAlertLedger(file, now).has('x'), false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('QA round 4', () => {
+  it('an alert whose delivery failed is not written down, so the next run sends it again', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ledger4-'));
+    try {
+      const file = join(dir, 'alerted.json');
+      const l = openAlertLedger(file, Date.now());
+      l.add('Rehearsal step 80 was not sent@2026-10-05T23:10:00.000Z');
+      l.add('Rehearsal step 79 was not sent@2026-10-05T23:05:00.000Z');
+      l.commit([
+        { transport: 'webhook', ok: false, title: 'Rehearsal step 80 was not sent' },
+        { transport: 'console', ok: true, title: 'Rehearsal step 80 was not sent' },
+        { transport: 'webhook', ok: true, title: 'Rehearsal step 79 was not sent' },
+      ]);
+      l.save();
+      const again = openAlertLedger(file, Date.now());
+      assert.equal(again.has('Rehearsal step 80 was not sent@2026-10-05T23:10:00.000Z'), false);
+      assert.equal(again.has('Rehearsal step 79 was not sent@2026-10-05T23:05:00.000Z'), true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a ledger that throws never stops a run: the step is still sent', async () => {
+    const broken = { has() { throw new TypeError('bad ledger'); }, add() { throw new TypeError('bad ledger'); } };
+    const chain = new FakeChain({ at: '2026-10-05T22:16:00Z', gateNext: 7, respond: gatePass(7) });
+    const h = harness();
+    const s = schedule(entry({ id: '78', gateQuarter: 5, notBefore: '2026-10-05T22:15:00Z' }), entry({ id: '80', gateQuarter: 7, notBefore: '2026-10-05T22:15:00Z' }));
+    const r = await runRehearsal({ schedule: s, targets: TARGETS, chain, cranker: CRANKER, nowMs: ms('2026-10-05T22:16:00Z'), dryRun: false,
+      pause: { paused: false, reason: null }, gasLimit: 100_000_000n, reportWindowMs: 30 * 60_000, confirmations: 1, alerts: h.alerts, log: h.log, alertState: broken });
+    assert.deepEqual(r.actions.map((a) => [a.id, a.decision]), [['78', 'blocked'], ['80', 'sent']]);
+  });
+
+  it('each send pins its nonce: the ledger\'s count, then one more for the next send in the run', async () => {
+    const s = schedule(
+      entry({ id: '93.1', function: 'submitShares', args: [8], notBefore: '2026-10-06T19:00:00Z', notAfter: '2026-10-06T19:45:00Z' }),
+      entry({ id: '93.2', notBefore: '2026-10-06T19:00:00Z', notAfter: '2026-10-06T19:45:00Z' }),
+    );
+    const chain = new FakeChain({ at: '2026-10-06T19:01:00Z', gateNext: 8, respond: (req, c) => (req.to === TARGETS.sra ? { status: 1 } : { status: 1, gate: { quarter: c.gateNext, passed: true, steps: 6 } }) });
+    chain.sentEarlier('2026-10-06T08:01:00Z', s.entries[0], { status: 1 }); // an earlier send: the cranker's nonce is 1
+    await run(chain, s, { now: '2026-10-06T19:01:00Z' });
+    assert.deepEqual(chain.sends.map((t) => t.nonce), [1, 2]);
+  });
+
+  it('a tagged message that sat in the mpool and landed as its window closed is checked against the plan', async () => {
+    const e = entry({ id: '80', gateQuarter: 7, notAfter: '2026-10-05T23:10:00Z', expect: 'revert:StepWeightRecordsFailed' });
+    const chain = new FakeChain({ at: '2026-10-05T23:12:00Z', gateNext: 8 });
+    chain.sentEarlier('2026-10-05T23:09:30Z', schedule(e).entries[0], { status: 1, gate: { quarter: 7, passed: true, steps: 5 } }, tagGasLimit(100_000_000n, '80'));
+    const r = await run(chain, schedule(e), { now: '2026-10-05T23:12:00Z' });
+    assert.deepEqual(r.actions.map((a) => [a.id, a.decision, a.match]), [['80', 'already-sent', false]]);
+    assert.match(r.alerts.alerts[0].title, /did not do what the plan expected/);
   });
 });
