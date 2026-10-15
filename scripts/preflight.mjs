@@ -6,7 +6,11 @@
  * deployment, after an RPC change, and as the first thing to reach for when a run fails.
  * It sends nothing and costs nothing.
  */
-import { loadConfig, describeConfig, redactRpcUrl, resolvePause, ZERO_ADDRESS } from '../src/config.mjs';
+import { formatEther, parseEther } from 'ethers';
+
+import { NETWORKS, loadConfig, describeConfig, redactRpcUrl, resolvePause, ZERO_ADDRESS } from '../src/config.mjs';
+import { candidateWallets, readF02 } from '../src/filecoin/f02.mjs';
+import { createLotusClient } from '../src/filecoin/lotus.mjs';
 import {
   connect, currentEpoch, hasCode, observeLatestBoundQuarter,
   readBalance, readChainGeometry, readSraQuarterState, readSwaGateState,
@@ -184,6 +188,46 @@ async function main() {
 
   const pause = resolvePause();
   record('cranker is not paused', !pause.paused, pause.reason ?? null, false);
+
+  // ---- the native side: what the Claim sender talks to ---------------------------------
+  const native = NETWORKS[config.networkName]?.addressPrefix;
+  if (native && config.networkName !== 'devnet') {
+    const lotus = createLotusClient(config.rpcUrl);
+    try {
+      await lotus.assertNoWalletAccess();
+      record('RPC refuses wallet methods', true, 'Filecoin.WalletList is not served');
+    } catch (err) {
+      record('RPC refuses wallet methods', false, err.message);
+    }
+    try {
+      const name = await lotus.assertNetwork(config.networkName);
+      record('Filecoin network name matches NETWORK', true, name);
+    } catch (err) {
+      record('Filecoin network name matches NETWORK', false, err.message);
+    }
+    try {
+      const f02 = await readF02(lotus, native);
+      record(
+        'f02 stream state readable',
+        true,
+        f02 ? `stream 2 has ${candidateWallets(f02).length} share-map/payable wallet(s)` : 'no stream state yet (before activation)'
+      );
+    } catch (err) {
+      record('f02 stream state readable', false, err.message, false);
+    }
+    const claimAddress = process.env.CLAIM_ADDRESS;
+    if (claimAddress) {
+      try {
+        const wei = BigInt(await lotus.call('WalletBalance', [claimAddress]));
+        const min = parseEther(config.claimMinBalanceFil);
+        record('Claim wallet funded', wei >= min, `${claimAddress} holds ${formatEther(wei)} FIL (threshold ${config.claimMinBalanceFil})`, false);
+      } catch (err) {
+        record('Claim wallet funded', false, err.message, false);
+      }
+    } else {
+      record('Claim wallet funded', true, 'skipped: set CLAIM_ADDRESS to check it', false);
+    }
+  }
 
   // ---- picture -------------------------------------------------------------
   process.stdout.write('\nWhere we are\n');
