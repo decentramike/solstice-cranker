@@ -12,11 +12,14 @@
     "So only postPeriod and verificationWindow can drift silently. The cranker cross-checks the",
     "schedule they produce against aggregatedFilecoinPayVolume() on every run and alerts on divergence.",
     "",
-    "genesisUnix is the chain's genesis timestamp, so any epoch's wall-clock time is genesisUnix + epoch * epochSeconds. scripts/crank-simple.mjs uses it to schedule entirely from the clock, with no chain reads at all. Verified against two blocks 1000 epochs apart on each network. null on the devnet, whose epochs are not wall-clock."
+    "genesisUnix is the chain's genesis timestamp, so any epoch's wall-clock time is genesisUnix + epoch * epochSeconds. scripts/crank-simple.mjs uses it to schedule entirely from the clock, with no chain reads at all. Verified against two blocks 1000 epochs apart on each network. null on the devnet, whose epochs are not wall-clock.",
+    "",
+    "addressPrefix (f/t) and claimMinBalanceFil belong to the native Claim sender (src/claim.mjs). The devnet's native side is devnet/fake-lotus.mjs, which reports the network name 'devnet'."
   ],
   "devnet": {
     "chainId": 3141592,
     "label": "Local devnet",
+    "addressPrefix": "t",
     "rpcUrl": "http://127.0.0.1:8545",
     "epochSeconds": 30,
     "genesisUnix": null,
@@ -29,11 +32,13 @@
     "hold": 40,
     "explorerTxUrl": null,
     "minBalanceFil": "0.01",
+    "claimMinBalanceFil": "1",
     "confirmations": 1
   },
   "calibnet": {
     "chainId": 314159,
     "label": "Filecoin Calibration",
+    "addressPrefix": "t",
     "rpcUrl": "https://api.calibration.node.glif.io/rpc/v1",
     "epochSeconds": 30,
     "genesisUnix": 1667326380,
@@ -46,23 +51,26 @@
     "hold": 720,
     "explorerTxUrl": "https://calibration.filfox.info/en/message/",
     "minBalanceFil": "0.1",
+    "claimMinBalanceFil": "1",
     "confirmations": 1
   },
   "mainnet": {
     "chainId": 314,
     "label": "Filecoin Mainnet",
+    "addressPrefix": "f",
     "rpcUrl": "https://api.node.glif.io/rpc/v1",
     "epochSeconds": 30,
     "genesisUnix": 1598306400,
     "sra": "0x0339f205314C8210AF7Cb075d1A96D012e7896a9",
     "swa": "0x66C11A9F6dfEC3c1557958cF9f575a023EB01421",
-    "activationEpoch": 6450120,
+    "activationEpoch": 6470280,
     "epochsPerQuarter": 262974,
     "postPeriod": 8640,
     "verificationWindow": 20160,
     "hold": 20160,
     "explorerTxUrl": "https://filfox.info/en/message/",
     "minBalanceFil": "0.1",
+    "claimMinBalanceFil": "0.1",
     "confirmations": 2
   }
 }

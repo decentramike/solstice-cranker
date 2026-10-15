@@ -17,6 +17,8 @@
  */
 import { randomBytes } from 'node:crypto';
 
+import { formatEther, parseEther } from 'ethers';
+
 import { AlertSink } from './alerts/index.mjs';
 import {
   connect,
@@ -651,6 +653,27 @@ export async function runCrank(config) {
       context: { epoch: String(epoch), cranker: address, balanceFil: balanceAfter.fil },
     });
     log.warn('wallet below threshold', { balance: balanceAfter.fil, threshold: config.minBalanceFil });
+  }
+
+  // The Claim wallet is checked here too, by address only, so a crank run in a window warns
+  // about both gas wallets. Filecoin.WalletBalance takes the f1 address as it is.
+  if (config.claimAddress) {
+    const claimWei = await tolerate(
+      'Claim wallet balance read',
+      async () => BigInt(await provider.send('Filecoin.WalletBalance', [config.claimAddress])),
+      null
+    );
+    if (claimWei !== null && claimWei < parseEther(config.claimMinBalanceFil)) {
+      alerts.raise({
+        severity: 'warn',
+        title: 'Solstice: Claim wallet is low on gas',
+        body:
+          `${config.claimAddress} holds ${formatEther(claimWei)} FIL, below the ${config.claimMinBalanceFil} FIL threshold. ` +
+          'Top it up; see docs/WALLET.md.',
+        context: { epoch: String(epoch), cranker: address, balanceFil: balanceAfter.fil },
+      });
+      log.warn('Claim wallet below threshold', { address: config.claimAddress, balance: formatEther(claimWei) });
+    }
   }
 
   // ---- what we had to do without ---------------------------------------------
