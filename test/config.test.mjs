@@ -87,107 +87,23 @@ describe('resolvePause', () => {
     });
   });
 
-  describe('CRANK_DISABLED_DAYS -- the rehearsal weekend', () => {
-    // The rehearsal has TWO no-crank weekends, from the rehearsal plan (activation
-    // Wed 2026-09-23 13:00 UTC, one quarter per day):
-    //   Q3  binds Sat 2026-09-26 19:00 -- "weekend post, no cranks"
-    //   Q4  binds Sun 2026-09-27 19:00 -- "weekend fail, no action"
-    //   Q10 binds Sat 2026-10-03 19:00 -- "weekend post, no cranks"
-    //   Q11 binds Sun 2026-10-04 19:00 -- "weekend, no action"
-    // Quarters bind at 19:00 (the 13:00 boundary + POST 2h + VERIFY 4h), so pausing on
-    // those calendar dates is what suppresses the cranks for those quarters.
-    const REHEARSAL = '2026-09-26,2026-09-27,2026-10-03,2026-10-04';
-
-    for (const day of ['2026-09-26', '2026-09-27', '2026-10-03', '2026-10-04']) {
-      it(`${day} pauses`, () => {
-        process.env.CRANK_DISABLED_DAYS = REHEARSAL;
-        for (const t of ['00:00:00', '11:30:00', '23:59:59']) {
-          const r = resolvePause(at(`${day}T${t}Z`));
-          assert.equal(r.paused, true, `${day}T${t}Z`);
-          assert.match(r.reason, new RegExp(day));
-        }
+  describe('the rehearsal pause variables are gone', () => {
+    // CRANK_PAUSED_WINDOWS, CRANK_DISABLED_DAYS and CRANK_DISABLED_WEEKDAYS were rehearsal
+    // scaffolding. On Mainnet a pause that lifts itself on a date is a way to lose a quarter,
+    // so they must not pause anything any more -- even when a stale repository variable still
+    // holds one. CRANK_PAUSED is the only stop switch.
+    for (const [name, value, instant] of [
+      ['CRANK_PAUSED_WINDOWS', '2026-10-03T19:00:00Z/2026-10-05T13:25:00Z', '2026-10-04T12:00:00Z'],
+      ['CRANK_DISABLED_DAYS', '2026-10-03,2026-10-04', '2026-10-03T19:00:00Z'],
+      ['CRANK_DISABLED_WEEKDAYS', 'Saturday,Sunday', '2026-10-03T19:00:00Z'],
+    ]) {
+      it(`${name} no longer pauses`, () => {
+        assert.equal(resolvePause(at(instant), { [name]: value }).paused, false);
+      });
+      it(`${name}, even malformed, no longer fails config load`, () => {
+        assert.doesNotThrow(() => loadConfig({ NETWORK: 'calibnet', CRANKER_PRIVATE_KEY: PLACEHOLDER_KEY, [name]: 'not a value' }));
       });
     }
-
-    it('the days on either side do not pause', () => {
-      process.env.CRANK_DISABLED_DAYS = REHEARSAL;
-      // Friday 25th: Q2 must still be cranked.
-      assert.equal(resolvePause(at('2026-09-25T23:59:59Z')).paused, false);
-      // Monday 28th: the Q5 cycle and the catch-up for Q3/Q4 happen on this day.
-      assert.equal(resolvePause(at('2026-09-28T00:00:00Z')).paused, false);
-      // Friday 2nd and Monday 5th, either side of the second weekend.
-      assert.equal(resolvePause(at('2026-10-02T23:59:59Z')).paused, false);
-      assert.equal(resolvePause(at('2026-10-05T00:00:00Z')).paused, false);
-    });
-
-    it('the crank that binds at 19:00 on each no-crank day is suppressed', () => {
-      process.env.CRANK_DISABLED_DAYS = REHEARSAL;
-      // Binding time is the moment that matters: 13:00 boundary + POST 2h + VERIFY 4h.
-      for (const day of ['2026-09-26', '2026-09-27', '2026-10-03', '2026-10-04']) {
-        assert.equal(resolvePause(at(`${day}T19:00:00Z`)).paused, true, `${day} 19:00Z`);
-      }
-    });
-
-    it('does NOT suppress the Monday catch-ups', () => {
-      process.env.CRANK_DISABLED_DAYS = REHEARSAL;
-      // The plan schedules these for 13:15 onward, actor "Any".
-      assert.equal(resolvePause(at('2026-09-28T13:15:00Z')).paused, false);
-      assert.equal(resolvePause(at('2026-10-05T13:30:00Z')).paused, false);
-    });
-
-    it('the boundary is UTC midnight, not local midnight', () => {
-      process.env.CRANK_DISABLED_DAYS = '2026-09-28';
-      // 23:30Z on the 27th is already the 28th in UTC+1..+12 and still the 27th in UTC.
-      assert.equal(resolvePause(at('2026-09-27T23:30:00Z')).paused, false);
-      assert.equal(resolvePause(at('2026-09-28T00:00:00Z')).paused, true);
-      // 00:30Z on the 29th is still the 28th in UTC-1..-12 but is the 29th in UTC.
-      assert.equal(resolvePause(at('2026-09-29T00:30:00Z')).paused, false);
-      assert.equal(resolvePause(at('2026-09-28T23:59:59Z')).paused, true);
-    });
-
-    it('tolerates spaces and trailing commas in the list', () => {
-      process.env.CRANK_DISABLED_DAYS = ' 2026-09-26 , 2026-09-27 ,';
-      assert.equal(resolvePause(at('2026-09-26T06:00:00Z')).paused, true);
-      assert.equal(resolvePause(at('2026-09-27T06:00:00Z')).paused, true);
-    });
-
-    it('an empty list pauses nothing', () => {
-      process.env.CRANK_DISABLED_DAYS = '';
-      assert.equal(resolvePause(at('2026-09-27T06:00:00Z')).paused, false);
-      process.env.CRANK_DISABLED_DAYS = ' , , ';
-      assert.equal(resolvePause(at('2026-09-27T06:00:00Z')).paused, false);
-    });
-  });
-
-  describe('CRANK_DISABLED_WEEKDAYS', () => {
-    it('matches the UTC weekday, case-insensitively', () => {
-      process.env.CRANK_DISABLED_WEEKDAYS = 'saturday,SUNDAY';
-      assert.equal(resolvePause(at('2026-09-26T12:00:00Z')).paused, true); // Saturday
-      assert.equal(resolvePause(at('2026-09-27T12:00:00Z')).paused, true); // Sunday
-      assert.equal(resolvePause(at('2026-09-28T12:00:00Z')).paused, false); // Monday
-      assert.match(resolvePause(at('2026-09-27T12:00:00Z')).reason, /Sunday \(UTC\)/);
-    });
-
-    it('uses the UTC weekday even when the local weekday differs', () => {
-      process.env.CRANK_DISABLED_WEEKDAYS = 'Sunday';
-      // 2026-09-28T00:30:00Z is Monday UTC but Sunday in every negative offset.
-      assert.equal(resolvePause(at('2026-09-28T00:30:00Z')).paused, false);
-      // 2026-09-27T23:30:00Z is Sunday UTC but Monday in every positive offset.
-      assert.equal(resolvePause(at('2026-09-27T23:30:00Z')).paused, true);
-    });
-
-    it('does not cover the whole rehearsal window on its own', () => {
-      // 2026-09-27 is a Sunday but 2026-09-28 is a Monday, so a Sat/Sun weekday rule leaves
-      // the second rehearsal day unpaused. CRANK_DISABLED_DAYS is the one that covers it.
-      process.env.CRANK_DISABLED_WEEKDAYS = 'Saturday,Sunday';
-      assert.equal(resolvePause(at('2026-09-27T12:00:00Z')).paused, true);
-      assert.equal(resolvePause(at('2026-09-28T12:00:00Z')).paused, false);
-    });
-
-    it('tolerates spaces', () => {
-      process.env.CRANK_DISABLED_WEEKDAYS = ' Sunday , Saturday ';
-      assert.equal(resolvePause(at('2026-09-27T12:00:00Z')).paused, true);
-    });
   });
 
   it('defaults to now when called with no argument', () => {
@@ -442,44 +358,6 @@ describe('the key survives the whitespace it actually arrives with', () => {
   it('still rejects a key that is actually wrong', () => {
     assert.throws(() => loadConfig({ NETWORK: 'calibnet', CRANKER_PRIVATE_KEY: KEY.slice(0, -2) + '\n' }));
     assert.throws(() => loadConfig({ NETWORK: 'calibnet', CRANKER_PRIVATE_KEY: 'x' + KEY.slice(1) }));
-  });
-});
-
-describe('CRANK_PAUSED_WINDOWS', () => {
-  const W = '2026-10-03T19:00:00Z/2026-10-05T13:25:00Z';
-
-  it('is half-open: paused from the start instant, running again at the end instant', () => {
-    assert.equal(resolvePause(new Date('2026-10-03T19:00:00Z'), { CRANK_PAUSED_WINDOWS: W }).paused, true);
-    assert.equal(resolvePause(new Date('2026-10-05T13:25:00Z'), { CRANK_PAUSED_WINDOWS: W }).paused, false);
-  });
-
-  it('names the window and its end in the reason, so the log says when it will resume', () => {
-    const r = resolvePause(new Date('2026-10-04T12:00:00Z'), { CRANK_PAUSED_WINDOWS: W });
-    assert.match(r.reason, /2026-10-05T13:25:00\.000Z/);
-  });
-
-  it('accepts several windows, and explicit offsets as well as Z', () => {
-    const env = { CRANK_PAUSED_WINDOWS: `${W}, 2026-10-10T00:00:00+02:00/2026-10-10T06:00:00+02:00` };
-    assert.equal(resolvePause(new Date('2026-10-09T23:00:00Z'), env).paused, true, '01:00 +02:00');
-    assert.equal(resolvePause(new Date('2026-10-10T05:00:00Z'), env).paused, false, '07:00 +02:00');
-  });
-
-  for (const [label, bad] of [
-    ['no timezone -- runner-local time is exactly the ambiguity to refuse', '2026-10-03T19:00/2026-10-05T13:25'],
-    ['only one end', '2026-10-03T19:00:00Z'],
-    ['end before start', '2026-10-05T13:25:00Z/2026-10-03T19:00:00Z'],
-    ['a date with no time', '2026-10-03/2026-10-05'],
-  ]) {
-    it(`refuses ${label}, loudly, at config load`, () => {
-      assert.throws(
-        () => loadConfig({ NETWORK: 'calibnet', CRANKER_PRIVATE_KEY: PLACEHOLDER_KEY, CRANK_PAUSED_WINDOWS: bad }),
-        /CRANK_PAUSED_WINDOWS/
-      );
-    });
-  }
-
-  it('a blank value, as GitHub passes an unset variable, pauses nothing', () => {
-    assert.equal(resolvePause(new Date('2026-10-04T12:00:00Z'), { CRANK_PAUSED_WINDOWS: '' }).paused, false);
   });
 });
 

@@ -12,7 +12,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { bindingEpoch, expiryEpoch } from '../src/schedule.mjs';
-import { resolvePause } from '../src/config.mjs';
 
 const NETWORKS = JSON.parse(readFileSync(new URL('../config/networks.json', import.meta.url), 'utf8'));
 
@@ -119,46 +118,3 @@ describe('the calibnet rehearsal lands on the days the plan says', () => {
   });
 });
 
-describe('the rehearsal pause window does exactly what the plan needs', () => {
-  const net = NETWORKS.calibnet;
-  // The value set in the repository variable CRANK_PAUSED_WINDOWS.
-  const WINDOW = '2026-10-03T19:00:00Z/2026-10-05T13:25:00Z';
-  const env = { CRANK_PAUSED_WINDOWS: WINDOW };
-  const pausedAt = (iso) => resolvePause(new Date(iso), env).paused;
-  const at = (q) => new Date(bindingTime(net, q) * 1000).toISOString();
-
-  it('suppresses the two weekend quarters at the instant each binds', () => {
-    assert.equal(pausedAt(at(5)), true, 'Q5 must not be cranked -- "nobody cranks"');
-    assert.equal(pausedAt(at(6)), true, 'Q6 must not be cranked');
-  });
-
-  it('does NOT start at Saturday midnight, so a late Q4 can still be rescued', () => {
-    // Q4 binds Fri 19:00 and its window closes the instant Q5 binds, Sat 19:00. If GitHub
-    // dropped Friday's runs, Saturday daytime is Q4's last chance; a midnight start would
-    // throw it away for nothing.
-    assert.equal(pausedAt('2026-10-03T00:00:00Z'), false);
-    assert.equal(pausedAt('2026-10-03T18:59:59Z'), false);
-    assert.equal(pausedAt('2026-10-03T19:00:00Z'), true);
-  });
-
-  it("stays paused through Monday morning, past the temporary stream's 13:00 start", () => {
-    // The plan's QuarterlyGateCheck(Q5) at 13:45 must REVERT for lack of headroom, which
-    // needs the temporary stream -- effective 13:00 -- to exist. Released at 00:00, the
-    // cranker would check Q5 thirteen hours early, before the stream, and it could pass.
-    assert.equal(pausedAt('2026-10-05T00:00:00Z'), true);
-    assert.equal(pausedAt('2026-10-05T13:00:00Z'), true, 'still paused as the stream takes effect');
-    assert.equal(pausedAt('2026-10-05T13:24:59Z'), true);
-  });
-
-  it('releases in time for the scripted Monday catch-up and for Q7', () => {
-    assert.equal(pausedAt('2026-10-05T13:25:00Z'), false, 'end is exclusive');
-    assert.equal(pausedAt('2026-10-05T13:30:00Z'), false, 'the 13:30 SubmitShares');
-    assert.equal(pausedAt(at(7)), false, 'Q7 binds Mon 19:00 and must be cranked');
-  });
-
-  it('leaves every weekday quarter alone', () => {
-    for (const q of [1, 2, 3, 4, 7, 8, 9, 10, 11]) {
-      assert.equal(pausedAt(at(q)), false, `Q${q}`);
-    }
-  });
-});

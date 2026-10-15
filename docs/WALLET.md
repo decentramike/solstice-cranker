@@ -1,6 +1,9 @@
-# The cranker wallet
+# The cranker wallet, and the Claim wallet
 
-How to create, fund, verify and rotate the wallet that pays gas for the Solstice cranks.
+How to create, fund, verify and rotate the two gas wallets: the **cranker wallet** (an EVM
+key, `CRANKER_PRIVATE_KEY`) that pays for the two Solstice cranks, and the **Claim wallet**
+(an f1 key, `CLAIM_PRIVATE_KEY`) that pays for `Claim` on f02. Two wallets, two keys, never
+one key for both. The Claim wallet has its own section, [7](#7-the-claim-key).
 
 **Read all of this before you generate anything.** The commands are short; the reasons
 they are written the way they are matter more than the commands.
@@ -241,6 +244,76 @@ Do not delay rotation to investigate first. Rotation takes ten minutes and costs
 
 ---
 
+## 7. The Claim key
+
+`Claim` is a native message to f02, a built-in actor, so it cannot come from the cranker's
+EVM key: an Ethereum transaction goes to the EVM, and an f410 account cannot sign a native
+message at all (FIP-0118 §2.4.5). The Claim wallet is a plain **f1 (secp256k1) account**.
+
+It is the same kind of wallet as the cranker's, with the same rules: gas only, no role,
+blast radius = its balance. `Claim` pays only the wallets f02's share map names, so this key
+cannot redirect anyone's rewards.
+
+**Never the cranker key.** The Claim workflow gets `CLAIM_PRIVATE_KEY` and nothing else;
+the crank workflow gets `CRANKER_PRIVATE_KEY` and nothing else. Loading refuses the same
+key in both.
+
+### Generate it (Mainnet)
+
+From the repository root, with `npm ci` done. No network call; prints the address only.
+
+```bash
+( umask 077; node --input-type=module -e '
+import { randomBytes } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { secp256k1 } from "@noble/curves/secp256k1";
+import { addressOfKey } from "./src/filecoin/message.mjs";
+const out = process.argv[1];
+let k; do { k = randomBytes(32); } while (!secp256k1.utils.isValidPrivateKey(k));
+writeFileSync(out, k.toString("hex") + "\n", { mode: 0o600 });
+console.log("address:      " + addressOfKey(k, "f"));
+console.log("key written:  " + out);
+' ~/.solstice/claim-mainnet.key )
+```
+
+The address starts `f1`. Write it down: it goes in the `CLAIM_ADDRESS` variable.
+
+### Load it, without the clipboard
+
+```bash
+gh secret set CLAIM_PRIVATE_KEY --repo decentramike/solstice-cranker < ~/.solstice/claim-mainnet.key
+```
+
+```bash
+gh variable set CLAIM_ADDRESS --repo decentramike/solstice-cranker --body f1...
+```
+
+`CLAIM_ADDRESS` must be the address of that key. A run whose key does not match it stops
+before reading anything else, because a secret holding the wrong key is a mistake that has
+happened before (the watchtower's, 2026-10-12).
+
+### Fund it
+
+About **0.5 FIL**. A Claim costs well under 0.01 FIL; the sender refuses any message whose
+maximum fee is above `CLAIM_MAX_FEE_FIL` (0.05) or above 10% of what it pays. Mainnet f1
+addresses take an ordinary FIL send; there is no `0x` form to confuse.
+
+### Verify it
+
+```bash
+NETWORK=mainnet CLAIM_ADDRESS=f1... npm run preflight
+```
+
+Expect `Claim wallet funded -- f1... holds 0.5 FIL`. Then **Actions → Solstice Claim → Run
+workflow** with **dry_run**, and confirm the summary shows the same sender.
+
+### Calibnet
+
+The same, with `"t"` in place of `"f"` and `~/.solstice/claim-calibnet.key`, funded from
+the faucet. Never the same key as Mainnet.
+
+---
+
 ## Quick checklist
 
 - [ ] Key generated locally, by me, with the command above
@@ -253,3 +326,5 @@ Do not delay rotation to investigate first. Rotation takes ten minutes and costs
 - [ ] `npm run preflight` shows the expected address, chain id and a non-zero balance
 - [ ] A dry-run workflow run prints that same address
 - [ ] Separate keys for calibnet and mainnet
+- [ ] A separate f1 Claim key, as `CLAIM_PRIVATE_KEY`, its address as `CLAIM_ADDRESS`
+- [ ] `CRANKER_ADDRESS` set to the cranker's public address, so every job checks both balances

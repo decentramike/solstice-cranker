@@ -9,47 +9,56 @@ map is outstanding.
 
 Nothing on chain sends that transaction. Someone has to.
 
-This repository is that someone: a script, an hourly schedule, a funded wallet, and an
-alert when a crank does not land.
+This repository is that someone: a script, a schedule that wakes up only when a crank is
+due, two funded gas wallets, and an alert when something does not land. It also sends the
+f02 `Claim` that pays the service stream out to the share map's wallets.
 
 ---
 
 ## What it does
 
-Solstice has two permissionless quarterly calls. Permissionless means anyone can send
-them — no multisig approval, no orchestrator key, no privileged role. It also means
-nobody is responsible for sending them, which is the problem.
+Three permissionless calls. Permissionless means anyone can send them -- no multisig, no
+orchestrator key, no privileged role. It also means nobody is responsible for sending them,
+which is the problem.
 
-| Call | Contract | Deadline | What happens if it is late |
+| Call | Where | Deadline | What happens if it is late |
 | :-- | :-- | :-- | :-- |
 | `submitShares(Q)` | Service Rewards Actor (SRA) | Hard. Must land before quarter Q+1 binds. | Reverts `NotLatestQuarter(Q)`. Quarter Q's share map is never installed, permanently. |
-| `quarterlyGateCheck()` | Stream Weight Actor (SWA) | None. | Nothing breaks, but the downstream weight step is delayed by exactly as long as the call is late. |
+| `quarterlyGateCheck()` | Stream Weight Actor (SWA) | None. | The w2 weight step is delayed by exactly as long as the call is late. |
+| `Claim(2, wallets)` | f02 (native message, method 4045527845) | None. | The wallets' entitlement waits in f02. Nothing is lost. |
 
-Each hour the cranker reads chain state, works out whether either call is due, and sends
-only the ones that are. A run with nothing due reads, reports, sends nothing and exits 0.
-That is the normal outcome of almost every run.
+### When it runs
 
-The submission window for `submitShares(Q)` is exactly one quarter wide: it opens when
-quarter Q binds and closes when quarter Q+1 binds. On mainnet that is about 91 days. In
-the calibnet rehearsal, where a "quarter" is one day, it is 24 hours. Hourly cron gives
-24 attempts inside the tightest window the project ever runs.
+**The crank runs only inside a window.** For quarter Q the window opens one hour before Q
+binds (binding is when `submitShares(Q)` becomes callable) and closes when `submitShares(Q)`
+and the gate check due at Q have both landed on chain. Every trigger runs for the first 72
+hours, then one hour in six until the work lands. Time alone never closes a window. Outside
+a window, a gate step reads `config/schedule.<network>.json` and exits in seconds: no
+`npm ci`, no key.
 
-## Status: live on calibnet for the rehearsal
+**The Claim runs weekly** (Wednesday 14:41 UTC) **and once 24 hours after each
+`submitShares` lands.** It discovers every wallet owed something in stream 2 from f02's own
+state, simulates, and sends a batch only if it pays more than 0 and its fee is at most
+0.05 FIL and at most 10% of the payout. Claim pays only the wallets in f02's share map
+(FIP-0118 §2.4.5), so the sender cannot redirect funds.
 
-The SRA and SWA are deployed on calibnet, and this repository cranks them on a schedule.
+The Mainnet schedule, generated from chain, is in
+[`docs/RUNBOOK.md`](docs/RUNBOOK.md#mainnet-schedule). Q1 binds **Thu 28 Jan 2027 20:27
+UTC**; the cranker first wakes an hour before.
+
+## Status: Mainnet-ready, sends off
 
 | | Address |
 | :-- | :-- |
 | SRA | `0x0339f205314C8210AF7Cb075d1A96D012e7896a9` |
 | SWA | `0x66C11A9F6dfEC3c1557958cF9f575a023EB01421` |
+| f02 | `f02` (Mainnet), `t02` (Calibnet) |
 
-These are the contracts the [watchtower](https://solsticewatchtower.eth.limo) reads, for the
-rehearsal that activates Mon 28 Sep 2026 13:00 UTC. They were redeployed for that plan: an
-earlier pair for a 23 September start is still live on chain but superseded, and nothing reads
-it. The same addresses are published for mainnet, where the first quarter binds in January 2027.
-
-Addresses come from upstream's `deployments.json`. If they move again, run
-`npm run sync:deployments -- --write` and then `npm run preflight`.
+The same SRA and SWA addresses exist on Calibnet and Mainnet. Mainnet activates **Mon 19 Oct
+2026 13:00 UTC, epoch 6470280** (`quarterStart(0)` on chain). Until the repository variable
+`MAINNET_SEND_ENABLED` is set, every Mainnet run is a dry run. Addresses and geometry come
+from upstream `deployments.json`; `npm run schedule` refuses to write a schedule when config,
+upstream and chain disagree.
 
 ## Quickstart
 
@@ -59,19 +68,22 @@ You need Node 20 or newer and nothing else.
 git clone https://github.com/decentramike/solstice-cranker
 cd solstice-cranker
 npm ci                 # npm ci --omit=dev on a production host; see below
-cp .env.example .env   # then fill in NETWORK, RPC_URL, CRANKER_PRIVATE_KEY
-npm run preflight      # checks RPC, chain id, addresses, wallet, balance. Sends nothing.
+cp .env.example .env   # then fill in NETWORK and RPC_URL; keys only where they will send
+npm run preflight      # RPC, chain id, network name, addresses, f02, balances. Sends nothing.
+npm run schedule       # regenerates config/schedule.<network>.json from chain
 npm run crank:dry      # decides what it would do, and does not do it
+npm run claim:dry      # discovers and simulates the Claim, and does not send it
 ```
 
 `npm run preflight` is the command to run first and the command to run when something
 looks wrong. It never broadcasts a transaction.
 
-To get a wallet, read [`docs/WALLET.md`](docs/WALLET.md) before doing anything else. You
-generate the key yourself, locally. It never goes through a chat, an issue, or a PR.
+To get a wallet, read [`docs/WALLET.md`](docs/WALLET.md) before doing anything else. There
+are two: the cranker's EVM key and the Claim's f1 key, never the same key. You generate
+them yourself, locally. They never go through a chat, an issue, or a PR.
 
-**Production installs use `npm ci --omit=dev`.** The cranker's only runtime dependency is
-ethers v6. Hardhat, the local devnet and the dashboard are dev dependencies and must never
+**Production installs use `npm ci --omit=dev`.** The runtime dependencies are ethers v6 and,
+for the native Claim message, `@noble/curves` and `@noble/hashes` (pinned). Hardhat, the local devnet and the dashboard are dev dependencies and must never
 be installed on the machine holding the key.
 
 ## Configuration
@@ -90,11 +102,12 @@ version; this table is the short one. Three further variables (`CRANK_CONFIRMATI
 | `CRANKER_PRIVATE_KEY` | secret | yes | The gas wallet. Holds nothing but FIL for fees, and has no role or permission on either contract. |
 | `SRA_ADDRESS` | variable | no | Overrides the committed SRA address. Set this when the deployment lands or moves. |
 | `SWA_ADDRESS` | variable | no | Same, for the SWA. |
-| `CRANK_PAUSED` | variable | no | Any truthy value: read state and report, send nothing. The big red switch. |
-| `CRANK_PAUSED_WINDOWS` | variable | no | Exact `start/end` ISO 8601 windows, explicit timezone required. The rehearsal's: `2026-10-03T19:00:00Z/2026-10-05T13:25:00Z`. |
-| `CRANK_DISABLED_DAYS` | variable | no | Comma-separated UTC dates on which not to send. Day-granular; prefer `CRANK_PAUSED_WINDOWS`. |
-| `CRANK_DISABLED_WEEKDAYS` | variable | no | Same idea, recurring: `Saturday,Sunday`. |
-| `CRANK_DRY_RUN` | dispatch input | no | Simulate and report, broadcast nothing. |
+| `CLAIM_PRIVATE_KEY` | secret | for Claim | The Claim gas wallet, an f1 key. Only the Claim workflow gets it. Never the cranker key. |
+| `CLAIM_ADDRESS` / `CRANKER_ADDRESS` | variables | no | Public addresses of the two wallets, so every job checks both balances without holding the other key. |
+| `CRANK_PAUSED` | variable | no | Any truthy value: read state and report, send nothing. Stops the crank and the Claim. |
+| `MAINNET_SEND_ENABLED` | variable | for Mainnet sends | Unset: every Mainnet run is a dry run. |
+| `CRANK_DRY_RUN` / `CLAIM_DRY_RUN` | dispatch input | no | Simulate and report, broadcast nothing. |
+| `CLAIM_MAX_FEE_FIL` / `CLAIM_MAX_MESSAGES` | variables | no | Claim guards. Defaults 0.05 FIL per message, 3 messages per run. |
 | `CRANK_MAX_GATE_CATCHUP` | variable | no | Cap on `quarterlyGateCheck()` calls in one run while catching up. Default 8. |
 | `CRANK_MIN_BALANCE_FIL` | variable | no | Low-balance warning threshold. Defaults to the network's `minBalanceFil`. |
 | `ALERT_TRANSPORT` | variable | no | `console` (default), `sendgrid`, `resend`, `webhook`. Comma-separate for several. |
@@ -117,18 +130,18 @@ verify them directly. Treat a change to either as a deployment-level change.
 
 **In GitHub:** Actions → *Solstice crank* → **Run workflow**. Two inputs:
 
-- **dry_run** — read state, decide, report, broadcast nothing. Use this first against a
-  new deployment.
-- **network** — override `NETWORK` for that run only. Leave blank for normal use.
+- **dry_run** — read state, decide, simulate, broadcast nothing.
+- **ignore_window** — run even outside a crank window. A dispatch without it (which is what
+  the external 15-minute timer sends) goes through the gate like a scheduled run.
 
-A manual run also counts as repository activity, which matters (see *Keeping the schedule
-alive* below).
+*Solstice Claim* → **Run workflow** has **dry_run**.
 
 **Locally:**
 
 ```bash
 npm run crank:dry    # decide only
 npm run crank        # decide and send
+npm run claim:dry    # discover and simulate the Claim
 ```
 
 ## Two crankers
@@ -164,56 +177,12 @@ To switch, change one line in `.github/workflows/solstice-crank.yml`:
 - run: node scripts/crank-simple.mjs   # was: node scripts/crank.mjs
 ```
 
-Both honour `CRANK_PAUSED` and `CRANK_DISABLED_DAYS`. Pausing is an operator decision, not a
-condition to be clever about, and the rehearsal's no-crank weekends depend on it.
+Both honour `CRANK_PAUSED`. Pausing is an operator decision, not a condition to be clever
+about.
 
 `CRANK_SIMPLE_WINDOW_HOURS` (default 6) is how long after a quarter binds the simple cranker
 keeps trying. Wider than one hour on purpose: the cron fires hourly, so a single missed run
 would otherwise lose the quarter. Repeat sends inside the window just revert.
-
-## Pausing for the rehearsal weekend
-
-Phase 1 is the calibnet rehearsal: activation **Monday 28 September 2026, 13:00 UTC** (epoch
-4109134), eleven daily quarters, Q1 on Tuesday 29 September through Q11 on Friday 9 October.
-The plan is "Rehearsal Plan for Sept 28th start" in the rehearsal doc; an earlier 23 September
-plan, and the contracts deployed for it, are superseded.
-
-Two clocks matter and they are six hours apart:
-
-- **Quarter boundary — 13:00 UTC.** Posting for quarter Q opens only once Q has ended, so each
-  quarter's cycle runs on the *following* day.
-- **Binding — 19:00 UTC.** Boundary + `POST_PERIOD` (2 h) + `VERIFICATION_WINDOW` (4 h). This is
-  when `submitShares(Q)` becomes callable, so it is when the cranker acts.
-
-**One no-crank weekend:** Q5 binds Sat 3 Oct 19:00 ("weekend post, no cranks") and Q6 binds
-Sun 4 Oct 19:00 ("weekend fail, no action"). Monday 5 October is the catch-up.
-
-Set the repository variable **`CRANK_PAUSED_WINDOWS`** to:
-
-```
-2026-10-03T19:00:00Z/2026-10-05T13:25:00Z
-```
-
-That is an exact window, not two calendar days, and both ends matter:
-
-- **It starts at Sat 19:00, not midnight.** Q4's window closes the instant Q5 binds. If GitHub
-  dropped Friday's runs, Saturday daytime is Q4's last chance, and a midnight start would throw
-  it away for nothing.
-- **It ends Mon 13:25, not 00:00.** Monday's temporary stream takes effect at 13:00, and the
-  plan's `QuarterlyGateCheck(Q5)` at 13:45 is supposed to *revert* for lack of headroom.
-  Released at midnight, the cranker would check Q5 thirteen hours early, before the stream
-  exists — and it could pass, changing the scenario's outcome rather than just its timestamp.
-
-The workflow still runs, still reads chain state and still reports inside the window. It just
-sends nothing. `CRANK_DISABLED_DAYS` still works but is day-granular and is the wrong shape here.
-
-**The weekend permanently destroys one share map, by design.** Monday's single `SubmitShares`
-installs Q6's map and supersedes Q5's. The cranker reports that as a critical alert and exits 1.
-That is the rehearsal working, not the cranker failing — see `docs/RUNBOOK.md` before anyone
-escalates it.
-
-Full procedure, including which scripted rows need a human, is in
-[`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ## Reverts you should expect
 
@@ -221,7 +190,7 @@ Most reverts here are normal. The cranker decodes each one and exits 0 for all o
 
 | Revert | Means | Cranker does |
 | :-- | :-- | :-- |
-| `NotBound(q)` | Too early. Quarter q's volumes have not bound yet. | Nothing. Tries again next hour. Exit 0. |
+| `NotBound(q)` | Too early. Quarter q's volumes have not bound yet. | Nothing. Tries again on the next run in the window. Exit 0. |
 | `AlreadySubmitted(q)` | Someone else sent it first. The call is permissionless; this is the system working. | Nothing. Exit 0. |
 | `StepsComplete()` | The gate has taken all 8 steps. It is closed for good and will never need calling again. | Stops calling the gate. Exit 0. |
 | A gate write inside its SWA hold | The previous gate write is still in its timelock. Only happens when checks run late and close together. | Retries after the hold. Exit 0. |
@@ -242,9 +211,10 @@ Start here, in this order:
 
 1. **Actions → Solstice crank → the most recent run.** The step log names the decision it
    made and decodes any revert. The job summary carries the same thing.
-2. **Open issues labelled `cranker-watchdog`.** The watchdog runs every 6 hours, checks the
-   chain independently of the crank job, and opens or updates an issue when a crank is
-   overdue. It closes the issue itself when things recover.
+2. **Open issues labelled `cranker-watchdog`.** The watchdog runs every 6 hours inside a
+   window and daily outside one, checks the chain and both wallet balances independently of
+   the crank job, and opens or updates an issue when a crank is overdue or a wallet is low.
+   It closes the issue itself when things recover.
 3. **`npm run preflight` locally.** Confirms RPC reachability, chain id, contract addresses,
    wallet address and balance. Sends nothing. This is what catches an empty wallet, a dead
    RPC endpoint or a zero contract address.
@@ -254,8 +224,8 @@ Start here, in this order:
 ## Keeping the schedule alive
 
 GitHub disables scheduled workflows in a public repository after 60 days with no repository
-activity. On mainnet there are roughly 8 cranks a year, so a 60-day quiet stretch between
-quarters is the normal state, not an exception — the crank workflow would be switched off
+activity. On mainnet a crank window opens about every 91 days, so a 60-day quiet stretch
+between quarters is the normal state, not an exception — the crank workflow would be switched off
 before the next crank was even due, and the first symptom would be a missed
 `submitShares(Q)`.
 
@@ -268,22 +238,27 @@ commit is the point. If a workflow does get disabled anyway: Actions → the wor
 
 ```
 .github/workflows/
-  solstice-crank.yml   hourly crank; holds the key; contents: read only
-  watchdog.yml         every 6h; independent chain check; opens an issue when overdue
+  solstice-crank.yml   gate, then the crank inside a window; holds CRANKER_PRIVATE_KEY; contents: read
+  solstice-claim.yml   gate, then Claim weekly and 24h after each submit; holds CLAIM_PRIVATE_KEY
+  watchdog.yml         6h in a window, daily outside; chain and balance check; opens an issue
   ci.yml               tests on Node 20 and 24, plus the ABI drift tripwire
   keepalive.yml        weekly repo touch so the schedules are not disabled
-scripts/               crank.mjs, watchdog.mjs, preflight.mjs, sync-deployments.mjs
-src/                   the shared library those scripts are built from
+scripts/               crank.mjs, claim.mjs, gate.mjs, schedule.mjs, watchdog.mjs, preflight.mjs,
+                       crank-simple.mjs, sync-deployments.mjs
+src/                   the shared library; src/filecoin/ is the native side (addresses, CBOR,
+                       message signing, Lotus client, f02 decoding); src/windows.mjs the gate
 config/
   networks.json        the three networks and their quarter geometry
+  schedule.*.json      generated by `npm run schedule`; the gate reads only this
   storage-slots.json   ERC-7201 slots read directly, because they have no getter
 abi/                   generated from upstream contracts; regenerate, never hand-edit
 test/                  unit tests
-devnet/                local chain, contract prep, rehearsal and demo. Never on a cron runner.
+devnet/                local chain, contract prep, rehearsal, demo, and fake-lotus.mjs (f02 for
+                       Claim tests). Never on a cron runner.
 dashboard/             read-only demo dashboard. Devnet only.
 docs/
   RUNBOOK.md           operations: secrets, alerts, pausing, rotation, escalation
-  WALLET.md            generating and funding the cranker wallet. Read before you touch a key.
+  WALLET.md            generating and funding both wallets. Read before you touch a key.
   DEMO.md              how to run the local demo for an audience
   DATA-CONTRACT.md     devnet/demo internal seam. Not production.
 PATCHES/               prepared changes to the governance repo. Not pushed.
@@ -293,7 +268,7 @@ PATCHES/               prepared changes to the governance repo. Not pushed.
 
 - Source issue: [filecoin-project/solstice#68](https://github.com/filecoin-project/solstice/issues/68) — design and run a Solstice cranker
 - Deployment: [filecoin-project/solstice#51](https://github.com/filecoin-project/solstice/issues/51) — calibration contract deployment (done)
-- [Solstice watchtower](https://solsticewatchtower.eth.limo) — reads the same SRA and SWA; every successful crank appears in its P2 panel
+- [Solstice watchtower](https://solsticewatchtower.eth.limo) — reads the same SRA, SWA and f02; every successful crank and Claim appears in its P2 panel
 - [FIP-0118](https://github.com/filecoin-project/FIPs/blob/master/FIPS/fip-0118.md) — the protocol rules these calls implement
 - [Solstice-Governance](https://github.com/filecoin-project/Solstice-Governance) — the operational layer; §2.2.9 and §2.3.10 are the oversight duties this automation serves
 
