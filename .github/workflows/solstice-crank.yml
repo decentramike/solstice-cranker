@@ -2,14 +2,21 @@
 #   submitShares(Q)       on the Service Rewards Actor
 #   quarterlyGateCheck()  on the Stream Weight Actor
 #
-# Why hourly and not daily. submitShares(Q) has a hard deadline: it must land before
-# quarter Q+1 binds. After that it reverts NotLatestQuarter and quarter Q's share map
-# is never installed -- that data is gone permanently, and RemoveOrchestrator stays
-# blocked until it lands. Hourly gives ~24 attempts per day, and the script is
-# idempotent: a run with nothing due reads state, reports, broadcasts nothing, exits 0.
+# It runs only inside a crank window. The first job, `gate`, reads
+# config/schedule.<NETWORK>.json -- no npm ci, no key -- and ends in seconds unless a window
+# is open:
 #
-# This job holds a private key. It gets `contents: read` and nothing else. Do not add
-# permissions here. If a step needs to write something, put it in another workflow.
+#   opens   one hour before quarter Q binds (binding = when submitShares(Q) becomes callable)
+#   closes  when submitShares(Q) AND the gate check due at Q have both landed on chain
+#
+# Every trigger runs for the first 72 hours of a window, then one hour in six until the work
+# lands. Elapsed time never closes a window. Outside one, the crank job does not even start.
+#
+# submitShares(Q) has a hard deadline: it must land before quarter Q+1 binds, or quarter Q's
+# share map is lost for good (NotLatestQuarter). The gate fails open: a missing schedule file
+# or an unreadable chain means the crank runs.
+#
+# This job holds a private key. It gets `contents: read` and nothing else.
 #
 # Source: https://github.com/filecoin-project/solstice/issues/68
 # Operations: docs/RUNBOOK.md
@@ -18,71 +25,66 @@ name: Solstice crank
 
 on:
   schedule:
-    # Every ten minutes, on odd minutes, never :00 or :30.
-    #
-    # Hourly was not enough, and this is measured rather than assumed. In the first day
-    # live, GitHub delivered 4 of 20 scheduled hourly runs -- 20%, at :56, :24, :41 and :40
-    # rather than :23. Scheduled runs are best-effort and dropped outright under load, and
-    # a low-activity public repo gets little priority. At that rate an hourly cron is a
-    # run every five hours, which is a thin margin against a 24-hour submit window and none
-    # at all if the drops cluster.
-    #
-    # Six attempts an hour at 20% delivery is still roughly one run an hour. And the extra
-    # attempts are free in every sense that matters:
-    #   - Actions minutes cost nothing on a public repo with standard runners.
-    #   - scripts/crank.mjs simulates before it sends and reads lastSubmittedQuarter, so a
-    #     run with nothing due broadcasts nothing and spends no gas.
-    #   - It cannot double-send. The concurrency group below serialises runs, and a run
-    #     that starts after a successful one sees the quarter already submitted.
-    #
-    # If you switch this workflow to scripts/crank-simple.mjs, revisit this: that cranker
-    # does not simulate, so every run inside its send window broadcasts, and ten-minute
-    # runs mean six reverted transactions an hour for the length of the window. Still cheap
-    # -- well under 0.1 FIL a quarter -- but no longer free.
-    #
-    # This cron is the BACKSTOP, not the primary timer. GitHub delivered this repo's scheduled
-    # runs every 5-6 hours regardless of what it asked for. The primary timer is cron-job.org
-    # calling workflow_dispatch every 15 minutes -- see docs/RUNBOOK.md, "Reliable scheduling".
-    #
-    # CALIBNET ONLY. When NETWORK moves to mainnet, change this to weekly -- see
-    # docs/RUNBOOK.md "Moving to mainnet", step 5, and what weekly costs.
-    - cron: '7,17,27,37,47,57 * * * *'
+    # Hourly, off the hour. GitHub drops and delays scheduled runs; the primary timer is the
+    # external one (cron-job.org, every 15 minutes, through workflow_dispatch) -- see
+    # docs/RUNBOOK.md, "Reliable scheduling". Both go through the same gate.
+    - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Dry run: read chain state, decide, report, broadcast nothing.'
+        description: 'Dry run: read chain state, decide, simulate, broadcast nothing.'
         type: boolean
         required: false
         default: false
-      force_call:
-        # For the rehearsal rows that expect a REVERTED message in the watchtower. The cranker
-        # proper simulates first and never sends a call it knows will fail; this sends one named
-        # call without that check. Manual only: a scheduled run has no inputs, so this is always
-        # 'none' there, and scripts/crank-force.mjs refuses a scheduled trigger regardless.
-        description: 'Force-send ONE call without the pre-send check (for scripted reverts). Leave on none for a normal crank.'
-        type: choice
+      ignore_window:
+        description: 'Run even outside a crank window. For a person at the keyboard; the external timer never sets it.'
+        type: boolean
         required: false
-        default: 'none'
-        options: ['none', 'quarterlyGateCheck', 'submitShares']
-      force_quarter:
-        description: 'Quarter for a forced submitShares. Ignored otherwise.'
-        type: string
-        required: false
-        default: ''
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  # One crank at a time, repo-wide, across both the schedule and manual runs.
-  # Never cancel a run in flight: it may already have broadcast a transaction, and a
-  # cancelled run cannot tell you whether that transaction landed.
+  # One crank at a time, across the schedule, the external timer and manual runs. Never cancel
+  # a run in flight: it may already have broadcast, and a cancelled run cannot say whether it landed.
   group: solstice-crank
   cancel-in-progress: false
 
 jobs:
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      go: ${{ steps.gate.outputs.go }}
+    steps:
+      - name: Check out the schedule and the gate only
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            config
+            scripts/gate.mjs
+            src/windows.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Is a crank window open?
+        id: gate
+        env:
+          NETWORK: ${{ vars.NETWORK }}
+          # Only to read three storage words when the clock says a window is open. No key here.
+          RPC_URL: ${{ secrets.RPC_URL }}
+          SRA_ADDRESS: ${{ vars.SRA_ADDRESS }}
+          SWA_ADDRESS: ${{ vars.SWA_ADDRESS }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          IGNORE_WINDOW: ${{ inputs.ignore_window && 'true' || '' }}
+        run: node scripts/gate.mjs crank
+
   crank:
     name: Crank
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
     # A catch-up run can send up to CRANK_MAX_GATE_CATCHUP (default 8) gate calls, each
     # waiting on confirmations at 30s per epoch. 20 minutes covers that with room spare.
@@ -103,16 +105,10 @@ jobs:
 
       - name: Install runtime dependencies only
         # --omit=dev keeps hardhat, the devnet and the dashboard off this runner.
-        # The cranker's only runtime dependency is ethers v6.
         run: npm ci --omit=dev
 
       - name: Crank
         env:
-          # --- required ---
-          # From the repository variable only. There used to be a per-run text override here; on
-          # 29 Sep a manual run had "Override" typed into it and failed with unknown NETWORK.
-          # It was never useful either -- RPC_URL stays on one network, so the chain-id guard
-          # rejects any other -- so it is gone. Change networks via the NETWORK variable.
           NETWORK: ${{ vars.NETWORK }}
           RPC_URL: ${{ secrets.RPC_URL }}
           CRANKER_PRIVATE_KEY: ${{ secrets.CRANKER_PRIVATE_KEY }}
@@ -121,11 +117,9 @@ jobs:
           SRA_ADDRESS: ${{ vars.SRA_ADDRESS }}
           SWA_ADDRESS: ${{ vars.SWA_ADDRESS }}
 
-          # --- pausing; see docs/RUNBOOK.md, "Rehearsal weekend" ---
+          # --- the stop switch, and the Mainnet send switch ---
           CRANK_PAUSED: ${{ vars.CRANK_PAUSED }}
-          CRANK_DISABLED_DAYS: ${{ vars.CRANK_DISABLED_DAYS }}
-          CRANK_PAUSED_WINDOWS: ${{ vars.CRANK_PAUSED_WINDOWS }}
-          CRANK_DISABLED_WEEKDAYS: ${{ vars.CRANK_DISABLED_WEEKDAYS }}
+          MAINNET_SEND_ENABLED: ${{ vars.MAINNET_SEND_ENABLED }}
 
           # --- behaviour ---
           CRANK_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
@@ -134,6 +128,10 @@ jobs:
           CRANK_CONFIRMATIONS: ${{ vars.CRANK_CONFIRMATIONS }}
           CRANK_LOG_LEVEL: ${{ vars.CRANK_LOG_LEVEL }}
 
+          # --- the Claim wallet's public address, for its low-balance check. Never its key. ---
+          CLAIM_ADDRESS: ${{ vars.CLAIM_ADDRESS }}
+          CLAIM_MIN_BALANCE_FIL: ${{ vars.CLAIM_MIN_BALANCE_FIL }}
+
           # --- alerting; all optional, console + job summary when unset ---
           ALERT_TRANSPORT: ${{ vars.ALERT_TRANSPORT }}
           ALERT_EMAIL_TO: ${{ vars.ALERT_EMAIL_TO }}
@@ -141,18 +139,7 @@ jobs:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
-
-          # --- manual force-send; empty on every scheduled run ---
-          CRANK_FORCE_CALL: ${{ inputs.force_call }}
-          CRANK_FORCE_QUARTER: ${{ inputs.force_quarter }}
-        # Inputs are read from the environment, never interpolated into the script, so no
-        # input value can become shell. On a schedule CRANK_FORCE_CALL is empty.
-        run: |
-          if [ -n "${CRANK_FORCE_CALL:-}" ] && [ "$CRANK_FORCE_CALL" != "none" ]; then
-            node scripts/crank-force.mjs
-          else
-            node scripts/crank.mjs
-          fi
+        run: node scripts/crank.mjs
 
       - name: Point at the runbook on failure
         if: failure()

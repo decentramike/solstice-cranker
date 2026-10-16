@@ -14,9 +14,13 @@
 
 name: Crank watchdog
 
+# Cadence: the cron fires every 6 hours; the gate job lets every one through while a crank
+# window is open, and only the 00:47 one outside a window -- so daily between quarters. It
+# also checks both gas wallets by address, which is the only check that runs between windows.
+
 on:
   schedule:
-    # Every 6 hours, offset from the crank's :23 so a transient RPC outage does not
+    # Every 6 hours, offset from the crank's :17 so a transient RPC outage does not
     # take out both at the same minute.
     - cron: '47 */6 * * *'
   workflow_dispatch:
@@ -30,8 +34,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    outputs:
+      go: ${{ steps.gate.outputs.go }}
+    steps:
+      - name: Check out the schedule and the gate only
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            config
+            scripts/gate.mjs
+            src/windows.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Window open, or the daily slot?
+        id: gate
+        env:
+          NETWORK: ${{ vars.NETWORK }}
+          RPC_URL: ${{ secrets.RPC_URL }}
+          SRA_ADDRESS: ${{ vars.SRA_ADDRESS }}
+          SWA_ADDRESS: ${{ vars.SWA_ADDRESS }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: node scripts/gate.mjs watchdog
+
   watchdog:
     name: Watchdog
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -64,8 +99,11 @@ jobs:
           SRA_ADDRESS: ${{ vars.SRA_ADDRESS }}
           SWA_ADDRESS: ${{ vars.SWA_ADDRESS }}
           CRANK_PAUSED: ${{ vars.CRANK_PAUSED }}
-          CRANK_DISABLED_DAYS: ${{ vars.CRANK_DISABLED_DAYS }}
-          CRANK_DISABLED_WEEKDAYS: ${{ vars.CRANK_DISABLED_WEEKDAYS }}
+          # Public addresses only, for the low-balance check. No key in this job.
+          CRANKER_ADDRESS: ${{ vars.CRANKER_ADDRESS }}
+          CLAIM_ADDRESS: ${{ vars.CLAIM_ADDRESS }}
+          CRANK_MIN_BALANCE_FIL: ${{ vars.CRANK_MIN_BALANCE_FIL }}
+          CLAIM_MIN_BALANCE_FIL: ${{ vars.CLAIM_MIN_BALANCE_FIL }}
           ALERT_TRANSPORT: ${{ vars.ALERT_TRANSPORT }}
           ALERT_EMAIL_TO: ${{ vars.ALERT_EMAIL_TO }}
           ALERT_EMAIL_FROM: ${{ vars.ALERT_EMAIL_FROM }}

@@ -134,6 +134,28 @@
   {
     "inputs": [
       {
+        "internalType": "bytes32",
+        "name": "taskId",
+        "type": "bytes32"
+      }
+    ],
+    "name": "PendingGateParams",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "Epoch",
+        "name": "until",
+        "type": "uint64"
+      }
+    ],
+    "name": "PendingWeightWrite",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "int256",
         "name": "exitCode",
         "type": "int256"
@@ -251,6 +273,43 @@
       }
     ],
     "name": "Approved",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "components": [
+          {
+            "components": [
+              {
+                "internalType": "FixedU18",
+                "name": "base",
+                "type": "uint256"
+              },
+              {
+                "internalType": "FixedU18",
+                "name": "stepRatio",
+                "type": "uint256"
+              }
+            ],
+            "internalType": "struct VolumeTarget",
+            "name": "target",
+            "type": "tuple"
+          },
+          {
+            "internalType": "uint64",
+            "name": "steps",
+            "type": "uint64"
+          }
+        ],
+        "indexed": false,
+        "internalType": "struct GateParams",
+        "name": "params",
+        "type": "tuple"
+      }
+    ],
+    "name": "GateParamsSet",
     "type": "event"
   },
   {
@@ -379,6 +438,58 @@
       }
     ],
     "name": "Upgraded",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint64",
+            "name": "id",
+            "type": "uint64"
+          },
+          {
+            "components": [
+              {
+                "internalType": "int256",
+                "name": "vStart",
+                "type": "int256"
+              },
+              {
+                "internalType": "int256",
+                "name": "slope",
+                "type": "int256"
+              },
+              {
+                "internalType": "Epoch",
+                "name": "tStart",
+                "type": "uint64"
+              },
+              {
+                "internalType": "int256",
+                "name": "floor",
+                "type": "int256"
+              },
+              {
+                "internalType": "int256",
+                "name": "cap",
+                "type": "int256"
+              }
+            ],
+            "internalType": "struct WeightRecord",
+            "name": "record",
+            "type": "tuple"
+          }
+        ],
+        "indexed": false,
+        "internalType": "struct WeightRecordUpdate[]",
+        "name": "updates",
+        "type": "tuple[]"
+      }
+    ],
+    "name": "WeightRecordsQueued",
     "type": "event"
   },
   {

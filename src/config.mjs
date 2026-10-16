@@ -46,86 +46,19 @@ function optionalAddress(env, name) {
 }
 
 /**
- * Parses CRANK_PAUSED_WINDOWS: comma-separated ISO 8601 intervals, `start/end`, half-open.
- *
- *   2026-10-03T19:00:00Z/2026-10-05T13:25:00Z
- *
- * Each end MUST carry an explicit timezone (Z or ±hh:mm). A bare "2026-10-03T19:00" is
- * local time in whatever zone the runner happens to be in, which is exactly the ambiguity
- * that turns a correct pause into one six hours off. A malformed window throws rather than
- * being skipped: silently not pausing would break the scenario the window exists to protect,
- * and a run that fails on config is visible the moment the variable is set.
- */
-function parsePauseWindows(raw) {
-  if (!raw) return [];
-  const ZONED = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const parts = entry.split('/');
-      if (parts.length !== 2 || !ZONED.test(parts[0]) || !ZONED.test(parts[1])) {
-        throw new ConfigError(
-          `CRANK_PAUSED_WINDOWS entry "${entry}" is not start/end with explicit timezones`,
-          'use e.g. 2026-10-03T19:00:00Z/2026-10-05T13:25:00Z'
-        );
-      }
-      const start = new Date(parts[0]);
-      const end = new Date(parts[1]);
-      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
-        throw new ConfigError(`CRANK_PAUSED_WINDOWS entry "${entry}" must end after it starts`);
-      }
-      return { start, end, raw: entry };
-    });
-}
-
-/** UTC weekday name, e.g. "Saturday". Pause rules are expressed in UTC because quarter boundaries are. */
-function utcWeekday(date) {
-  return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][date.getUTCDay()];
-}
-
-/**
  * Decides whether this run is allowed to broadcast.
  *
- * Pausing exists for the rehearsal: quarters 5 and 6 fall on a weekend and deliberately
- * test what happens when nobody cranks. A paused run still reads chain state and reports,
- * so the logs stay continuous -- it just sends nothing.
+ * CRANK_PAUSED is the one stop switch, and it stops everything that sends: the crank and the
+ * Claim. A paused run still reads chain state and reports, so the logs stay continuous -- it
+ * just sends nothing. The rehearsal's day and window pauses (CRANK_PAUSED_WINDOWS,
+ * CRANK_DISABLED_DAYS, CRANK_DISABLED_WEEKDAYS) are gone: on Mainnet a pause that lifts by
+ * itself on a date is a way to lose a quarter, not a feature.
  */
 export function resolvePause(now = new Date(), rawEnv = process.env) {
   const env = withoutBlanks(rawEnv);
   if (truthy(env.CRANK_PAUSED)) {
     return { paused: true, reason: 'CRANK_PAUSED is set' };
   }
-
-  // Exact-instant windows, for when a whole calendar day is the wrong shape. The rehearsal
-  // needed this: the no-crank weekend has to start the moment Q5 binds (Saturday 19:00, so a
-  // late Q4 is not stranded -- its deadline is that same instant) and end after Monday's
-  // temporary stream takes effect (13:00), or the scripted "gate check reverts for lack of
-  // headroom" would instead run at 00:00 before the stream exists, and might pass.
-  for (const window of parsePauseWindows(env.CRANK_PAUSED_WINDOWS)) {
-    if (now >= window.start && now < window.end) {
-      return {
-        paused: true,
-        reason: `inside CRANK_PAUSED_WINDOWS ${window.raw} (until ${window.end.toISOString()})`,
-      };
-    }
-  }
-
-  const days = (env.CRANK_DISABLED_DAYS ?? '')
-    .split(',').map((s) => s.trim()).filter(Boolean);
-  const today = now.toISOString().slice(0, 10);
-  if (days.includes(today)) {
-    return { paused: true, reason: `${today} is listed in CRANK_DISABLED_DAYS` };
-  }
-
-  const weekdays = (env.CRANK_DISABLED_WEEKDAYS ?? '')
-    .split(',').map((s) => s.trim()).filter(Boolean);
-  const weekday = utcWeekday(now);
-  if (weekdays.some((w) => w.toLowerCase() === weekday.toLowerCase())) {
-    return { paused: true, reason: `${weekday} (UTC) is listed in CRANK_DISABLED_WEEKDAYS` };
-  }
-
   return { paused: false, reason: null };
 }
 
@@ -189,6 +122,13 @@ export function loadConfig(rawEnv = process.env, { requireKey = true } = {}) {
     }
   }
 
+  if (env.CRANKER_PRIVATE_KEY && env.CLAIM_PRIVATE_KEY) {
+    const norm = (k) => String(k).trim().toLowerCase().replace(/^0x/, '');
+    if (norm(env.CRANKER_PRIVATE_KEY) === norm(env.CLAIM_PRIVATE_KEY)) {
+      throw new ConfigError('CRANKER_PRIVATE_KEY and CLAIM_PRIVATE_KEY are the same key', 'they must be two separate keys; see docs/WALLET.md');
+    }
+  }
+
   const sra = optionalAddress(env, 'SRA_ADDRESS') ?? getAddress(network.sra);
   const swa = optionalAddress(env, 'SWA_ADDRESS') ?? getAddress(network.swa);
 
@@ -212,10 +152,6 @@ export function loadConfig(rawEnv = process.env, { requireKey = true } = {}) {
       throw new ConfigError('CRANK_TARGET_QUARTER must be an integer >= 1 (quarter 0 is never submittable)');
     }
   }
-
-  // Validated here as well as when it is used, so a malformed window fails the run on its
-  // first line with a sentence that says what to fix -- not mid-run, after state was read.
-  parsePauseWindows(env.CRANK_PAUSED_WINDOWS);
 
   const maxGateCatchup = Number(env.CRANK_MAX_GATE_CATCHUP ?? 8);
   if (!Number.isInteger(maxGateCatchup) || maxGateCatchup < 1 || maxGateCatchup > 64) {
@@ -247,10 +183,20 @@ export function loadConfig(rawEnv = process.env, { requireKey = true } = {}) {
 
     minBalanceWei,
     minBalanceFil: String(minBalanceFil),
+
+    // The Claim key's public address, so each crank run can warn when that wallet runs low
+    // too. Only the address: the crank job never holds CLAIM_PRIVATE_KEY.
+    claimAddress: env.CLAIM_ADDRESS ?? null,
+    claimMinBalanceFil: String(env.CLAIM_MIN_BALANCE_FIL ?? network.claimMinBalanceFil ?? '0.1'),
     maxGateCatchup,
     targetQuarter,
 
-    dryRun: truthy(env.CRANK_DRY_RUN),
+    dryRun: truthy(env.CRANK_DRY_RUN) || mainnetSendsBlocked(name, env),
+    dryRunReason: truthy(env.CRANK_DRY_RUN)
+      ? 'CRANK_DRY_RUN is set'
+      : mainnetSendsBlocked(name, env)
+        ? 'NETWORK=mainnet and MAINNET_SEND_ENABLED is not set'
+        : null,
     stateDir: env.CRANK_STATE_DIR ? resolve(env.CRANK_STATE_DIR) : null,
 
     alerts: {
@@ -293,4 +239,120 @@ function safeHost(url) {
   }
 }
 
-export { ConfigError, NETWORKS, truthy, safeHost };
+/**
+ * Strips the RPC URL out of text bound for a log or an alert.
+ *
+ * ethers writes the full request URL into `err.message` and `err.stack` for a SERVER_ERROR (a 429,
+ * a 5xx), so an API key in RPC_URL's path or query lands in whatever prints them. Actions masks the
+ * secret in its own log, but not in an email or a webhook body. Only `shortMessage` is clean.
+ */
+function redactRpcUrl(text, rpcUrl) {
+  if (text === null || text === undefined) return text;
+  let out = String(text);
+  if (rpcUrl) out = out.split(rpcUrl).join(`<RPC_URL ${safeHost(rpcUrl)}>`);
+  // Whatever form the URL took in the error -- normalised, re-encoded -- never pass a requestUrl on.
+  return out.replace(/("?requestUrl"?\s*[:=]\s*)"(?!<RPC_URL )[^"]*"/g, '$1"<redacted>"');
+}
+
+/**
+ * Mainnet sends are off until an operator turns them on.
+ *
+ * NETWORK=mainnet with MAINNET_SEND_ENABLED unset (or falsy) forces every run -- crank and
+ * Claim, scheduled or manual -- into a dry run: it reads, decides, simulates and reports, and
+ * broadcasts nothing. The switch is a repository variable, so turning Mainnet on is one
+ * visible, reversible change, not a code edit.
+ */
+export function mainnetSendsBlocked(networkName, rawEnv = process.env) {
+  const env = withoutBlanks(rawEnv);
+  return networkName === 'mainnet' && !truthy(env.MAINNET_SEND_ENABLED);
+}
+
+function parseFil(value, name) {
+  try {
+    const wei = parseEther(String(value));
+    if (wei < 0n) throw new Error('negative');
+    return wei;
+  } catch {
+    throw new ConfigError(`${name} is not a FIL amount: ${value}`);
+  }
+}
+
+function intIn(env, name, fallback, lo, hi) {
+  const v = Number(env[name] ?? fallback);
+  if (!Number.isInteger(v) || v < lo || v > hi) throw new ConfigError(`${name} must be an integer between ${lo} and ${hi}`);
+  return v;
+}
+
+/**
+ * Configuration for the native Claim sender.
+ *
+ * The key is CLAIM_PRIVATE_KEY: an f1 (secp256k1) key, separate from CRANKER_PRIVATE_KEY.
+ * They are never the same key -- loading refuses that outright -- because the two jobs hold
+ * different secrets and a leak of one should not reach the other.
+ *
+ * CLAIM_ADDRESS is the public f1 address of that key. It is optional with a key (and must then
+ * match it: the watchtower found a secret holding the wrong key on 2026-10-12), and it is what
+ * a keyless dry run simulates from.
+ */
+export function loadClaimConfig(rawEnv = process.env, { requireKey = true } = {}) {
+  const env = withoutBlanks(rawEnv);
+  const base = loadConfig({ ...env, CRANKER_PRIVATE_KEY: undefined }, { requireKey: false });
+  const network = NETWORKS[base.networkName];
+  if (!network.addressPrefix) {
+    throw new ConfigError(`NETWORK=${base.networkName} has no native Filecoin side; Claim runs on calibnet and mainnet only`);
+  }
+
+  const rawKey = env.CLAIM_PRIVATE_KEY ?? null;
+  if (requireKey && !rawKey) {
+    throw new ConfigError('CLAIM_PRIVATE_KEY is not set', 'see docs/WALLET.md, "The Claim key"; a dry run needs only CLAIM_ADDRESS');
+  }
+  if (rawKey && env.CRANKER_PRIVATE_KEY) {
+    const norm = (k) => String(k).trim().toLowerCase().replace(/^0x/, '');
+    if (norm(rawKey) === norm(env.CRANKER_PRIVATE_KEY)) {
+      throw new ConfigError('CLAIM_PRIVATE_KEY and CRANKER_PRIVATE_KEY are the same key', 'generate a separate f1 key for Claim; see docs/WALLET.md');
+    }
+  }
+
+  const dryRunAsked = truthy(env.CLAIM_DRY_RUN);
+  const mainnetBlocked = mainnetSendsBlocked(base.networkName, env);
+  const mode = env.CLAIM_MODE ?? 'manual';
+  if (!['weekly', 'post-submit', 'manual'].includes(mode)) {
+    throw new ConfigError(`CLAIM_MODE must be weekly, post-submit or manual, not "${mode}"`);
+  }
+  let postSubmitQuarter = null;
+  if (env.CLAIM_QUARTER !== undefined) {
+    postSubmitQuarter = Number(env.CLAIM_QUARTER);
+    if (!Number.isInteger(postSubmitQuarter) || postSubmitQuarter < 1) throw new ConfigError('CLAIM_QUARTER must be an integer >= 1');
+  }
+
+  return {
+    ...base,
+    prefix: network.addressPrefix,
+    rawKey,
+    claimAddress: env.CLAIM_ADDRESS ?? null,
+    crankerAddress: env.CRANKER_ADDRESS ?? null,
+    maxFeeAtto: parseFil(env.CLAIM_MAX_FEE_FIL ?? '0.05', 'CLAIM_MAX_FEE_FIL'),
+    maxFeeFil: String(env.CLAIM_MAX_FEE_FIL ?? '0.05'),
+    maxMessages: intIn(env, 'CLAIM_MAX_MESSAGES', 3, 1, 20),
+    batchSize: intIn(env, 'CLAIM_BATCH_SIZE', 64, 1, 64),
+    // Never pay more than a tenth of what a Claim moves. Below that, waiting is cheaper.
+    maxFeeRatioPercent: 10,
+    claimMinBalanceWei: parseFil(env.CLAIM_MIN_BALANCE_FIL ?? network.claimMinBalanceFil ?? '0.1', 'CLAIM_MIN_BALANCE_FIL'),
+    claimMinBalanceFil: String(env.CLAIM_MIN_BALANCE_FIL ?? network.claimMinBalanceFil ?? '0.1'),
+    pollMs: intIn(env, 'CLAIM_POLL_MS', 15_000, 10, 120_000),
+    pollAttempts: intIn(env, 'CLAIM_POLL_ATTEMPTS', 40, 1, 400),
+    mode,
+    postSubmitQuarter,
+    paused: resolvePause(new Date(), env).paused,
+    dryRun: dryRunAsked || mainnetBlocked || !rawKey,
+    dryRunReason: dryRunAsked
+      ? 'CLAIM_DRY_RUN is set'
+      : mainnetBlocked
+        ? 'NETWORK=mainnet and MAINNET_SEND_ENABLED is not set'
+        : !rawKey
+          ? 'no CLAIM_PRIVATE_KEY'
+          : null,
+  };
+}
+
+export { ConfigError, NETWORKS, truthy, safeHost, redactRpcUrl, withoutBlanks };

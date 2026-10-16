@@ -1,0 +1,117 @@
+# Sends FIP-0118 Claim(2, wallets) on f02 -- the call that moves the service stream's accrued
+# FIL out of f02 to the payout wallets in the share map.
+#
+# Claim is permissionless and pays only the wallets f02's tables name, so this sender cannot
+# redirect funds. It has no deadline: an unclaimed entitlement just waits. What the sender
+# guards against is wasted gas and nonce collisions -- see src/claim.mjs.
+#
+# When it runs:
+#   - weekly, Wednesday 14:41 UTC;
+#   - once 24 hours after each submitShares(Q) lands. The hourly trigger's gate opens a window
+#     from binding(Q) + 24h for 72 hours; inside it the script times 24 hours from the actual
+#     SharesSubmitted event and sends at most once per quarter;
+#   - by hand (Run workflow), with dry_run.
+#
+# Its own key: CLAIM_PRIVATE_KEY, an f1 (secp256k1) key. Never the cranker's key.
+# Its own concurrency group: one sender per key, so two runs cannot race for a nonce.
+# CRANK_PAUSED stops it too. On Mainnet it is a dry run until MAINNET_SEND_ENABLED is set.
+
+name: Solstice Claim
+
+on:
+  schedule:
+    - cron: '41 14 * * 3' # weekly; must match WEEKLY_CLAIM_CRON in scripts/gate.mjs
+    - cron: '41 * * * *' # post-submit window check; skips in seconds outside one
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: discover, simulate, report; broadcast nothing.'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # One Claim sender per key. Not shared with the crank: they hold different keys.
+  group: solstice-claim
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      go: ${{ steps.gate.outputs.go }}
+      mode: ${{ steps.gate.outputs.mode }}
+      quarter: ${{ steps.gate.outputs.quarter }}
+    steps:
+      - name: Check out the schedule and the gate only
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            config
+            scripts/gate.mjs
+            src/windows.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Is a Claim due?
+        id: gate
+        env:
+          NETWORK: ${{ vars.NETWORK }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: node scripts/gate.mjs claim
+
+  claim:
+    name: Claim
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    # Up to CLAIM_MAX_MESSAGES (3) messages, each polled for up to 10 minutes.
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install runtime dependencies only
+        run: npm ci --omit=dev
+
+      - name: Claim
+        env:
+          NETWORK: ${{ vars.NETWORK }}
+          RPC_URL: ${{ secrets.RPC_URL }}
+          CLAIM_PRIVATE_KEY: ${{ secrets.CLAIM_PRIVATE_KEY }}
+          CLAIM_ADDRESS: ${{ vars.CLAIM_ADDRESS }}
+          CLAIM_MODE: ${{ needs.gate.outputs.mode }}
+          CLAIM_QUARTER: ${{ needs.gate.outputs.quarter }}
+          CLAIM_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          CLAIM_MAX_FEE_FIL: ${{ vars.CLAIM_MAX_FEE_FIL }}
+          CLAIM_MAX_MESSAGES: ${{ vars.CLAIM_MAX_MESSAGES }}
+          CLAIM_MIN_BALANCE_FIL: ${{ vars.CLAIM_MIN_BALANCE_FIL }}
+          CRANK_PAUSED: ${{ vars.CRANK_PAUSED }}
+          MAINNET_SEND_ENABLED: ${{ vars.MAINNET_SEND_ENABLED }}
+          SRA_ADDRESS: ${{ vars.SRA_ADDRESS }}
+          SWA_ADDRESS: ${{ vars.SWA_ADDRESS }}
+          # The cranker's public address, for its low-balance check. Never its key.
+          CRANKER_ADDRESS: ${{ vars.CRANKER_ADDRESS }}
+          CRANK_MIN_BALANCE_FIL: ${{ vars.CRANK_MIN_BALANCE_FIL }}
+          ALERT_TRANSPORT: ${{ vars.ALERT_TRANSPORT }}
+          ALERT_EMAIL_TO: ${{ vars.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_FROM: ${{ vars.ALERT_EMAIL_FROM }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: node scripts/claim.mjs

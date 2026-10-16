@@ -57,6 +57,29 @@ const CLASSIFICATION = {
     severity: 'info',
     explain: (a) => `a previous governance write is still in its hold until epoch ${a[0]}`,
   },
+
+  // The gate-check guard (upstream #67). quarterlyGateCheck() now runs these BEFORE anything
+  // else, so while either holds, every gate check reverts with it -- including one that would
+  // otherwise be a plain NotBound. Both are deferrals the governance process creates on purpose,
+  // and the gate has no deadline, so they wait for the next run rather than alerting. Missing
+  // from the ABI until it was rebuilt from the deployed commit; on 1 Oct, during the rehearsal's
+  // "SWA objection", PendingGateParams turned three healthy runs red.
+  PendingGateParams: {
+    kind: 'retry',
+    outcome: 'not-due',
+    severity: 'info',
+    explain: (a) =>
+      `a SetGateParams governance task (${String(a[0]).slice(0, 10)}…) is still outstanding; ` +
+      'the gate check waits until it is executed or vetoed',
+  },
+  PendingWeightWrite: {
+    kind: 'retry',
+    outcome: 'not-due',
+    severity: 'info',
+    explain: (a) =>
+      `a discretionary SWA weight write is still settling in f02 until epoch ${a[0]}; ` +
+      'the gate check waits for it',
+  },
   StepWeightRecordsFailed: {
     kind: 'retry',
     outcome: 'not-due',
@@ -150,6 +173,23 @@ export function extractRevertData(err) {
       if (node[key]) candidates.push(node[key]);
     }
   }
+
+  // Last resort: Lotus also writes the revert bytes into its message text, e.g. from eth_estimateGas
+  // on calibnet: "message execution failed (exit=[33], revert reason=[0x3461d1f0…], vm error=[…])".
+  // ethers hoists them into `data` today; if a gateway or a later version ever stops doing so, a
+  // real revert must not read as "no revert data", which isTransportFailure now treats as a sick node.
+  seen.clear();
+  candidates.push(err);
+  while (candidates.length) {
+    const node = candidates.shift();
+    if (!node || typeof node !== 'object' || seen.has(node)) continue;
+    seen.add(node);
+    const m = typeof node.message === 'string' && node.message.match(/revert reason=\[(0x[0-9a-fA-F]{8,})\]/);
+    if (m) return m[1];
+    for (const key of ['error', 'info', 'cause', 'body', 'value']) {
+      if (node[key]) candidates.push(node[key]);
+    }
+  }
   return null;
 }
 
@@ -195,17 +235,19 @@ export function classifyRevert(err) {
     const selector = raw && raw.length >= 10 ? raw.slice(0, 10) : null;
     const described = err?.shortMessage ?? err?.message ?? null;
 
+    // A selector wins over ethers' own wording. ethers always supplies a shortMessage, and for an
+    // unknown selector it says only "execution reverted (unknown custom error)" -- which is what
+    // run 192's alert said on 1 Oct, when the real problem was an ABI one commit behind the
+    // deployment. The alert has to name the selector and say what to do.
     return verdict(UNKNOWN, {
       reason: selector,
       raw,
-      message:
-        described ??
-        (selector
-          ? `reverted with unrecognised selector ${selector}; the deployed contract does not ` +
-            'match the shipped ABI. Regenerate with `npm run contracts:build && npm run abi:generate`.'
-          : transport
-            ? 'the RPC endpoint did not respond'
-            : 'reverted with no decodable reason'),
+      message: selector
+        ? `reverted with unrecognised selector ${selector}; the deployed contract does not match ` +
+          'the shipped ABI. Rebuild abi/ from the commit the contracts were deployed from ' +
+          '(REF in devnet/prepare-contracts.mjs): `npm run contracts:build && npm run abi:generate`.'
+        : described ??
+          (transport ? 'the RPC endpoint did not respond' : 'reverted with no decodable reason'),
     });
   }
 
@@ -224,6 +266,40 @@ export function isTransportFailure(err) {
   const code = err?.code;
   if (['NETWORK_ERROR', 'TIMEOUT', 'SERVER_ERROR', 'UNKNOWN_ERROR'].includes(code)) {
     return !extractRevertData(err);
+  }
+
+  // A CALL_EXCEPTION with NO revert data at all is the node failing, not the contract.
+  //
+  // Captured from ethers v6 (test/fixtures/provider-errors.json), three different failures all
+  // arrive as exactly this -- CALL_EXCEPTION, "missing revert data", data null:
+  //   - a rate limit returned as a JSON-RPC error inside an HTTP 200
+  //   - Lotus failing a call for a non-revert reason (an out-of-gas exit, say)
+  //   - an execution error the node reports without a payload
+  // A genuine revert from these contracts always carries data: every one of them uses custom
+  // errors, and Lotus returns the revert bytes with exit code 33. So no data means nothing was
+  // learned about the contract, and the honest reaction is to ask again.
+  //
+  // A revert that DOES carry data stays a contract outcome even if its selector is unknown --
+  // that is how an ABI that no longer matches the deployment gets noticed.
+  //
+  // "No revert information" means all of these are absent, which is exactly what the captured
+  // shapes show (data, revert and reason all null). Each one present means the contract answered:
+  //   - revert bytes anywhere in the error, however Lotus nested them
+  //   - `data: "0x"`: an explicit EMPTY revert. ethers keeps it distinct from a missing payload
+  //     ("no data present; likely require(false) occurred" against "missing revert data"); it is
+  //     what calling a function the target does not have looks like -- a wrong address, a stale ABI
+  //   - a decoded `revert` or a `reason`: ethers only fills those in when it decoded something
+  //   - a `receipt`: ethers v6 throws CALL_EXCEPTION from tx.wait() for a status-0 receipt, with
+  //     data, revert and reason all null. That message was mined; it is the chain's answer, and
+  //     reading it as a sick node would skip the "did someone else get there first?" check.
+  if (code === 'CALL_EXCEPTION') {
+    const hasRevertInfo =
+      Boolean(extractRevertData(err)) ||
+      (typeof err?.data === 'string' && /^0x/i.test(err.data)) ||
+      Boolean(err?.revert) ||
+      (typeof err?.reason === 'string' && err.reason.length > 0) ||
+      Boolean(err?.receipt);
+    return !hasRevertInfo;
   }
   return false;
 }

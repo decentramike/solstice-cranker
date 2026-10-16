@@ -23,7 +23,7 @@ const UPSTREAM = 'https://github.com/filecoin-project/solstice.git';
 // build, and following upstream's moving default branch would make that job fail on any
 // unrelated upstream commit. Set SOLSTICE_REF to track a different ref, or 'main' to
 // deliberately check for interface drift.
-const REF = process.env.SOLSTICE_REF ?? '87fd57cda91f24dc3db3fd5695f4d4939befa452';
+const REF = process.env.SOLSTICE_REF ?? '0006edced7402da3dd02eec1488016d3c9ea72ef'; // chore: deploy v1 (#83)
 
 function sh(cmd, args, cwd) {
   return execFileSync(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();

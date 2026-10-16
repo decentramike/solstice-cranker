@@ -5,7 +5,7 @@
  * Exit 0 means the run is healthy: either the cranks landed, or they were correctly not
  * due. Exit 1 means something needs a person, and an alert has already gone out.
  */
-import { loadConfig, describeConfig } from '../src/config.mjs';
+import { loadConfig, describeConfig, mainnetSendsBlocked, redactRpcUrl, truthy } from '../src/config.mjs';
 import { runCrank } from '../src/crank.mjs';
 import { log, writeJobSummary } from '../src/logger.mjs';
 
@@ -41,7 +41,9 @@ async function main() {
     // A dry run broadcasts nothing, so it does not need a signing key. That lets the whole
     // decision path be exercised against a live deployment before the key is anywhere near
     // CI -- which is the order you want to do it in.
-    config = loadConfig(process.env, { requireKey: !process.env.CRANK_DRY_RUN });
+    // So does a Mainnet run while MAINNET_SEND_ENABLED is off: it is forced dry.
+    const forcedDry = truthy(process.env.CRANK_DRY_RUN) || mainnetSendsBlocked(process.env.NETWORK, process.env);
+    config = loadConfig(process.env, { requireKey: !forcedDry });
   } catch (err) {
     log.error(err.message);
     process.exitCode = 1;
@@ -49,7 +51,7 @@ async function main() {
   }
 
   log.info('configuration', describeConfig(config));
-  if (config.dryRun) log.warn('CRANK_DRY_RUN is set: simulating only, nothing will be broadcast');
+  if (config.dryRun) log.warn(`dry run (${config.dryRunReason}): simulating only, nothing will be broadcast`);
 
   try {
     const { record, exitCode, alerts } = await runCrank(config);
@@ -66,8 +68,12 @@ async function main() {
     // Anything reaching here is unexpected: an RPC that stayed down through its retries,
     // a wrong address, a chain-id mismatch. Alert on it rather than dying quietly in a log
     // nobody is watching.
-    log.error('crank aborted', { error: err.message });
-    if (err.stack) log.debug(err.stack);
+    // ethers puts the full RPC URL into message and stack for a 429 or a 5xx; the alert goes to an
+    // inbox or a webhook that Actions' secret masking never sees.
+    const message = redactRpcUrl(err.message, config.rpcUrl);
+    const stack = redactRpcUrl(err.stack ?? null, config.rpcUrl);
+    log.error('crank aborted', { error: message });
+    if (stack) log.debug(stack);
 
     try {
       const { AlertSink } = await import('../src/alerts/index.mjs');
@@ -75,8 +81,8 @@ async function main() {
       sink.raise({
         severity: 'critical',
         title: `Solstice cranker aborted on ${config.networkName}`,
-        body: err.message,
-        detail: err.stack ?? null,
+        body: message,
+        detail: stack,
         context: { epoch: '—', cranker: '—', balanceFil: '—' },
       });
       await sink.flush({ minSeverity: 'warn' });

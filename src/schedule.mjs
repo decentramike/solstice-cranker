@@ -172,8 +172,55 @@ export function buildSchedule(g, epoch, state = {}) {
  * @param {number|null} computed   the schedule's latest bound quarter
  * @param {number|null} observed   the chain's, from probing aggregatedFilecoinPayVolume
  */
-export function compareWithChain(computed, observed) {
+/**
+ * How close to a binding epoch a one-quarter disagreement counts as the head moving mid-run
+ * rather than as config drift. Ten epochs is five minutes: a run takes seconds, and this leaves
+ * room for a load-balanced RPC whose nodes are a few epochs apart.
+ */
+export const BINDING_RACE_MARGIN_EPOCHS = 10n;
+
+/**
+ * True when computed and observed differ by exactly one quarter, right at that quarter's binding.
+ *
+ * The schedule is computed from the head read at the start of a run; the chain is probed a moment
+ * later. Start a run one epoch before a binding and the head has crossed it by the time the probe
+ * lands. On 30 Sep and 1 Oct this happened at 19:00:14, read the head at the epoch before the
+ * binding, and raised a CRITICAL "config is too large" alert -- on the two runs that landed their
+ * quarter within seconds of binding. Config was right; the clock had simply moved.
+ *
+ * The trade, deliberately: a genuinely wrong postPeriod or verificationWindow that happens to
+ * disagree right at a computed boundary is excused for that one run, and caught on the next one
+ * fifteen minutes later, outside the margin. Missing drift for fifteen minutes is cheap;
+ * a critical alert on a perfect run teaches people to ignore critical alerts.
+ */
+export function isBindingRace(g, epoch, computed, observed) {
+  const a = computed ?? 0;
+  const b = observed ?? 0;
+  if (Math.abs(a - b) !== 1) return false;
+  const boundary = bindingEpoch(g, Math.max(a, b));
+  const distance = epoch >= boundary ? epoch - boundary : boundary - epoch;
+  return distance <= BINDING_RACE_MARGIN_EPOCHS;
+}
+
+/**
+ * @param {{geometry: Geometry, epoch: bigint}} [context]
+ *        The geometry and head the computed quarter came from. Pass it and a disagreement at a
+ *        binding boundary is recognised as the head moving, not as drift.
+ */
+export function compareWithChain(computed, observed, context) {
   if (computed === observed) return { agrees: true, divergence: null };
+
+  if (context && isBindingRace(context.geometry, context.epoch, computed, observed)) {
+    return {
+      agrees: true,
+      divergence: null,
+      race: true,
+      message:
+        `computed quarter ${computed ?? 'none'} and the chain's ${observed ?? 'none'} differ by one, ` +
+        `within ${BINDING_RACE_MARGIN_EPOCHS} epochs of that quarter's binding -- the head moved ` +
+        'during the run. Not config drift. Using the chain.',
+    };
+  }
 
   if (observed === null || (computed !== null && computed > observed)) {
     return {

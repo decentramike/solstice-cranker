@@ -15,7 +15,11 @@ Node's built-in runner (`node --test`). No vitest, no jest, no extra dependencie
 | `errors.test.mjs` | `src/errors.mjs` | Reverts are ABI-encoded with the real selectors from `abi/selectors.json` and wrapped in seven provider error shapes. |
 | `config.test.mjs` | `src/config.mjs` | Pause rules in UTC, key validation, redaction. |
 | `chain.test.mjs` | `src/chain.mjs` | Storage decoding against hand-packed words and one word captured from a live devnet; probing, retry, provider construction. |
+| `filecoin.test.mjs` | `src/filecoin/*`, Claim params, fee guards | CIDs and signature checked against a real calibnet Claim; params against the old tool's known-good hex. |
+| `claim.test.mjs` | `src/claim.mjs` | Against `devnet/fake-lotus.mjs`, which verifies every signature and nonce. |
+| `windows.test.mjs` | `src/windows.mjs`, `scripts/gate.mjs` | Window boundaries, the 72-hour switch, closure only on chain state, the committed schedules and the runbook table. |
 | `integration/crank.test.mjs` | `src/crank.mjs` end to end | Real transactions on the devnet. |
+| `integration/lifecycle.test.mjs` | gate + crank + Claim over several quarters | Missed run, late gate, second sender, lost quarter, post-submit Claim. |
 | `helpers/geometries.mjs` | shared fixtures | The Solidity reference implementations and the epoch sweeps. Not a test file. |
 
 ## The reference implementations

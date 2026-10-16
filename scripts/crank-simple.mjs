@@ -39,7 +39,7 @@ import { Contract, JsonRpcProvider, Wallet, formatEther } from 'ethers';
 
 import sraAbi from '../abi/ServiceRewardsActor.json' with { type: 'json' };
 import swaAbi from '../abi/StreamWeightActor.json' with { type: 'json' };
-import { loadConfig, resolvePause, NETWORKS } from '../src/config.mjs';
+import { loadConfig, redactRpcUrl, resolvePause, NETWORKS } from '../src/config.mjs';
 import { classifyRevert } from '../src/errors.mjs';
 import { log, persistRun, writeJobSummary } from '../src/logger.mjs';
 
@@ -101,10 +101,9 @@ async function main() {
   log.section(`Solstice cranker (simple) -- ${config.label}`);
 
   // The pause is honoured here too, even though this cranker ignores every other condition.
-  // CRANK_PAUSED and CRANK_DISABLED_DAYS are not conditions to be clever about -- they are a
-  // person having decided the cranker must not send. The rehearsal's Q3/Q4 and Q10/Q11
-  // scenarios depend on exactly that, and a "simple" cranker that quietly overrode it would
-  // invalidate them with no warning.
+  // CRANK_PAUSED is not a condition to be clever about -- it is a person having decided the
+  // cranker must not send, and a "simple" cranker that quietly overrode it would be worse
+  // than none.
   const pause = resolvePause(new Date());
   if (pause.paused) {
     log.warn(`paused: ${pause.reason}; sending nothing`);
@@ -261,6 +260,6 @@ function report({ config, now, q, actions, exitCode, balanceFil = null, cranker 
 try {
   await main();
 } catch (err) {
-  log.error('simple cranker aborted', { error: err.message });
+  log.error('simple cranker aborted', { error: redactRpcUrl(err.message, process.env.RPC_URL) });
   process.exitCode = 1;
 }

@@ -13,7 +13,9 @@
  *
  * Exit 0 healthy, exit 1 overdue.
  */
-import { loadConfig } from '../src/config.mjs';
+import { formatEther, parseEther } from 'ethers';
+
+import { loadConfig, redactRpcUrl } from '../src/config.mjs';
 import {
   connect, currentEpoch, hasCode, observeLatestBoundQuarter,
   readChainGeometry, readSraQuarterState, readSwaGateState,
@@ -145,6 +147,35 @@ async function main() {
     }
   }
 
+  // ---- both gas wallets, by public address --------------------------------------
+  // The watchdog holds no key, so it checks the addresses the repository variables name. It
+  // runs daily even outside a crank window, which is the only check that can catch a wallet
+  // drained between quarters before the next window needs it.
+  const low = [];
+  if (process.env.CRANKER_ADDRESS) {
+    try {
+      const wei = await provider.getBalance(process.env.CRANKER_ADDRESS);
+      if (wei < config.minBalanceWei) low.push(`cranker ${process.env.CRANKER_ADDRESS}: ${formatEther(wei)} FIL (threshold ${config.minBalanceFil})`);
+    } catch (err) {
+      log.warn('cranker balance unreadable', { error: err.shortMessage ?? err.message });
+    }
+  }
+  if (config.claimAddress) {
+    try {
+      const wei = BigInt(await provider.send('Filecoin.WalletBalance', [config.claimAddress]));
+      if (wei < parseEther(config.claimMinBalanceFil)) low.push(`Claim ${config.claimAddress}: ${formatEther(wei)} FIL (threshold ${config.claimMinBalanceFil})`);
+    } catch (err) {
+      log.warn('Claim wallet balance unreadable', { error: err.shortMessage ?? err.message });
+    }
+  }
+  if (low.length) {
+    findings.push({
+      severity: 'warn',
+      title: 'a gas wallet is low',
+      body: `${low.join('; ')}. Top it up before the next window; see docs/WALLET.md. An empty wallet is how a deadline gets missed.`,
+    });
+  }
+
   // ---- report --------------------------------------------------------------
   const healthy = findings.length === 0;
 
@@ -194,6 +225,6 @@ async function main() {
 try {
   await main();
 } catch (err) {
-  log.error('watchdog aborted', { error: err.message });
+  log.error('watchdog aborted', { error: redactRpcUrl(err.message, process.env.RPC_URL) });
   process.exitCode = 1;
 }
